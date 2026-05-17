@@ -17,6 +17,7 @@ def main() -> None:
     subparsers.add_parser("perf", help="Queue perf tasks via CLI")
     subparsers.add_parser("queue", help="List queued tasks")
     subparsers.add_parser("compare", help="Run analysis/comparison")
+    subparsers.add_parser("status", help="Show runner and task status (non-blocking)")
 
     args, remaining = parser.parse_known_args()
 
@@ -41,11 +42,40 @@ def main() -> None:
 
     elif args.command == "run":
         import asyncio
+        import json
+        import traceback
+        from datetime import datetime
 
+        from src.config import PROJECT_ROOT
         from src.task_runner import TaskRunner
 
+        crash_file = PROJECT_ROOT / "last_crash.json"
         runner = TaskRunner()
-        asyncio.run(runner.run())
+        try:
+            asyncio.run(runner.run())
+        except KeyboardInterrupt:
+            print("Runner stopped by user.")
+        except Exception:
+            tb = traceback.format_exc()
+            timestamp = datetime.utcnow().isoformat() + "Z"
+            task_desc = str(runner.task) if runner.task else None
+
+            # Log to main log file
+            logger = logging.getLogger("conductress.crash")
+            logger.critical("Runner crashed!\n%s", tb)
+
+            # Write crash file for status command
+            crash_info = {
+                "timestamp": timestamp,
+                "traceback": tb,
+                "task": task_desc,
+            }
+            crash_file.write_text(json.dumps(crash_info, indent=2))
+
+            # Also print to stderr for nohup captures
+            print(f"[{timestamp}] RUNNER CRASHED:", file=sys.stderr)
+            print(tb, file=sys.stderr)
+            sys.exit(1)
 
     elif args.command == "setup":
         import asyncio
@@ -89,6 +119,11 @@ def main() -> None:
         from src.analysis import main as analysis_main
 
         sys.exit(analysis_main(remaining))
+
+    elif args.command == "status":
+        from src.status import print_status
+
+        sys.exit(print_status())
 
 
 if __name__ == "__main__":
