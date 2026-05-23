@@ -19,7 +19,7 @@ def _find_runner_pid() -> Optional[int]:
             continue
         try:
             cmdline = (proc_dir / "cmdline").read_bytes().decode(errors="ignore")
-            if "src" in cmdline and "run" in cmdline and "python" in cmdline:
+            if "conductress" in cmdline and "run" in cmdline and "python" in cmdline:
                 return int(proc_dir.name)
         except (PermissionError, FileNotFoundError, ProcessLookupError):
             continue
