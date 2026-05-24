@@ -98,6 +98,10 @@ class TaskRunner:
                     await self.__run_task(self.task)
                 except Exception as exc:
                     self._record_failure(self.task, exc)
+                    # Release any leaked CPU allocations from the failed task
+                    await asyncio.gather(
+                        *[Server(s.ip).kill_all_valkey_instances_on_host() for s in get_servers()]
+                    )
                     for sub in self._subscribers:
                         sub.on_task_failed(self.task)
                     queue.finish_task(self.task)
