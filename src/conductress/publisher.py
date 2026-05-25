@@ -97,7 +97,7 @@ class DashboardPublisher:
         """Rsync export directory to remote target."""
         ssh_cmd = f"ssh -i {self._ssh_key} -F /dev/null -o StrictHostKeyChecking=no -o ConnectTimeout=10"
         result = subprocess.run(
-            ["rsync", "-az", "-e", ssh_cmd, f"{self._export_dir}/", self.target],
+            ["rsync", "-az", "--chmod=D755,F644", "-e", ssh_cmd, f"{self._export_dir}/", self.target],
             capture_output=True,
             text=True,
             timeout=30,

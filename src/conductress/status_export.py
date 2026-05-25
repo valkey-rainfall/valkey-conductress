@@ -72,7 +72,7 @@ def _publish_status(target: str) -> None:
     ssh_cmd = f"ssh -i {ssh_key} -F /dev/null -o StrictHostKeyChecking=no -o ConnectTimeout=10"
     dest = f"{target}/status/{filename}.json"
     result = subprocess.run(
-        ["rsync", "-az", "-e", ssh_cmd, str(STATUS_EXPORT_FILE), dest],
+        ["rsync", "-az", "--chmod=D755,F644", "-e", ssh_cmd, str(STATUS_EXPORT_FILE), dest],
         capture_output=True,
         text=True,
         timeout=15,
