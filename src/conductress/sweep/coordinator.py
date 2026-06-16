@@ -369,7 +369,10 @@ class SweepCoordinator(BaseSweepCoordinator):
 
     @property
     def workload_id(self) -> str:  # type: ignore[override]
-        return f"{self._label}-t{self._io_threads}-p{self._pipelining}"
+        suffix = f"-t{self._io_threads}-p{self._pipelining}"
+        if self._label.endswith(suffix):
+            return self._label
+        return f"{self._label}{suffix}"
 
     def get_next_sweep_task(self) -> Optional[PerfTaskData]:
         """Legacy interface: get next task directly."""
