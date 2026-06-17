@@ -431,7 +431,7 @@ class TestEngineSupport:
         assert sf.name == "memory_state_set-v64.json"
 
     def test_workload_id_has_engine_prefix(self, redis_coordinator):
-        assert redis_coordinator.workload_id == "redis-memory-set-v64"
+        assert redis_coordinator.workload_id == "memory-redis-set-v64"
 
     def test_create_task_uses_engine_source(self, redis_coordinator):
         from conductress.sweep.planner import SweepTask, TaskPriority
@@ -474,7 +474,7 @@ class TestEngineSupport:
         assert len(coordinators) == len(MEMORY_WORKLOADS)
         # All should have redis prefix in workload_id
         for c in coordinators:
-            assert c.workload_id.startswith("redis-memory-")
+            assert c.workload_id.startswith("memory-redis-")
         # State files should have redis prefix
         for c in coordinators:
             assert "redis-" in c.state_file.name
