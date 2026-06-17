@@ -77,7 +77,7 @@ class MemorySweepCoordinator(BaseSweepCoordinator):
     @property
     def workload_id(self) -> str:  # type: ignore[override]
         prefix = f"{self.engine.source}-" if self.engine and self.engine.source != "valkey" else ""
-        return f"memory-{prefix}{self._workload.label}"
+        return f"{prefix}memory-{self._workload.label}"
 
     def get_urgency_score(self) -> float:
         """Memory urgency with flatness discount.
