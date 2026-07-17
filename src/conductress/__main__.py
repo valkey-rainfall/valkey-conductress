@@ -7,6 +7,22 @@ import sys
 from conductress.config import CONDUCTRESS_LOG
 
 
+def _configure_setup_console_logging() -> logging.Logger:
+    """Mirror INFO+ from the whole conductress package to the console.
+
+    bootstrap.py logs through its module logger (conductress.bootstrap);
+    configuring only __main__'s logger here left fatal errors (e.g. the
+    missing-keyfile sys.exit in ensure_ssh_key) invisible on the console.
+    Attaching the handler to the package logger covers every module.
+    """
+    logger = logging.getLogger("conductress")
+    logger.setLevel(logging.INFO)
+    ch = logging.StreamHandler()
+    ch.setLevel(logging.INFO)
+    logger.addHandler(ch)
+    return logger
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="conductress", description="Valkey Conductress")
     subparsers = parser.add_subparsers(dest="command")
@@ -156,11 +172,7 @@ def main() -> None:
         from conductress import config
         from conductress.bootstrap import SERVERS, ensure_server_ssh_fingerprints, ensure_ssh_key, update_host_list
 
-        logger = logging.getLogger(__name__)
-        logger.setLevel(logging.INFO)
-        ch = logging.StreamHandler()
-        ch.setLevel(logging.INFO)
-        logger.addHandler(ch)
+        logger = _configure_setup_console_logging()
         logger.info("⊹˚₊‧───Starting update/setup───‧₊˚⊹")
 
         ensure_ssh_key()

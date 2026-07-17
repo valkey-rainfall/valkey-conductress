@@ -132,3 +132,42 @@ class TestNoSubcommand:
         assert exc_info.value.code == 0
         captured = capsys.readouterr()
         assert "usage:" in captured.out.lower() or "Usage:" in captured.out
+
+
+class TestSetupConsoleLogging:
+    """Setup must surface log output from ALL conductress modules on the console.
+
+    Regression test for the silent-exit bug: ensure_ssh_key() logs a fatal
+    error through conductress.bootstrap's module logger and then sys.exit(1)s.
+    The old code attached the console handler only to conductress.__main__,
+    so the error never reached the console and setup died with no output.
+    """
+
+    def test_bootstrap_logger_output_reaches_console(self, capsys):
+        import logging
+
+        from conductress.__main__ import _configure_setup_console_logging
+
+        pkg_logger = _configure_setup_console_logging()
+        handler = pkg_logger.handlers[-1]
+        try:
+            bootstrap_logger = logging.getLogger("conductress.bootstrap")
+            bootstrap_logger.error("keyfile-missing-marker")
+            captured = capsys.readouterr()
+            assert "keyfile-missing-marker" in captured.err
+        finally:
+            pkg_logger.removeHandler(handler)
+
+    def test_main_logger_output_reaches_console(self, capsys):
+        import logging
+
+        from conductress.__main__ import _configure_setup_console_logging
+
+        pkg_logger = _configure_setup_console_logging()
+        handler = pkg_logger.handlers[-1]
+        try:
+            logging.getLogger("conductress.__main__").info("banner-marker")
+            captured = capsys.readouterr()
+            assert "banner-marker" in captured.err
+        finally:
+            pkg_logger.removeHandler(handler)
