@@ -35,6 +35,18 @@ def main() -> None:
         default=None,
         help="Publish dashboard data to this rsync target after each task (e.g. user@host:/path)",
     )
+    run_parser.add_argument(
+        "--nudge-url",
+        type=str,
+        default=None,
+        help="HTTP endpoint to POST task-completion 'nudge' notifications to (e.g. http://localhost:8080/hooks/nudge).",
+    )
+    run_parser.add_argument(
+        "--nudge-on",
+        type=str,
+        default="completed,failed,empty",
+        help="Comma-separated event types that trigger a nudge: completed, failed, empty (default: all). Unrecognized event names are silently ignored.",
+    )
     subparsers.add_parser("setup", help="Run setup/bootstrap")
     subparsers.add_parser("queue", help="Manage the task queue (list, add, remove)")
     subparsers.add_parser("compare", help="Run analysis/comparison")
@@ -116,11 +128,20 @@ def main() -> None:
 
         crash_file = PROJECT_ROOT / "last_crash.json"
         repo_path = Path(args.repo) if args.repo else None
+        # Parse nudge events from comma-separated string
+        nudge_events = None
+        if args.nudge_url:
+            if args.nudge_on:
+                nudge_events = {e.strip() for e in args.nudge_on.split(",") if e.strip()}
+            else:
+                nudge_events = {"completed", "failed", "empty"}
         runner = TaskRunner(
             sweep=args.sweep,
             memory_sweep=args.memory_sweep,
             repo_path=repo_path,
             publish_target=args.publish,
+            nudge_url=args.nudge_url,
+            nudge_on=nudge_events,
         )
         if args.sweep:
             print("Sweep mode enabled — will auto-generate tasks when queue is empty")
