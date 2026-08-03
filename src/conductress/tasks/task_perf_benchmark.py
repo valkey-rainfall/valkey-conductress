@@ -132,6 +132,9 @@ class PerfTaskData(BaseTaskData):
     bench_clients: int = 0  # valkey-benchmark -c override; 0 = PERF_BENCH_CLIENTS default
     client_netns: str = ""  # run the benchmark client inside this network namespace (dual-ENI
     # real-NIC hairpin topology; see docs/real-nic-hairpin.md). Empty = default namespace.
+    bench_binary: str = ""  # expert: absolute path to an alternative benchmark binary. The client
+    # is part of the workload definition, so results from an overridden binary are NOT comparable
+    # with sweep history; the override is recorded in result metadata. Empty = repo default.
 
     def __post_init__(self):
         super().__post_init__()
@@ -174,6 +177,7 @@ class PerfTaskData(BaseTaskData):
             bench_threads=self.bench_threads,
             bench_clients=self.bench_clients,
             client_netns=self.client_netns,
+            bench_binary=self.bench_binary,
         )
 
 
@@ -316,6 +320,7 @@ class PerfTaskRunner(BaseTaskRunner):
         bench_threads: int = 0,
         bench_clients: int = 0,
         client_netns: str = "",
+        bench_binary: str = "",
     ):
         super().__init__(task_name)
 
@@ -349,6 +354,10 @@ class PerfTaskRunner(BaseTaskRunner):
         self.bench_threads = bench_threads or PERF_BENCH_THREADS
         self.bench_clients = bench_clients or PERF_BENCH_CLIENTS
         self.client_netns = client_netns
+        # Expert override for the benchmark binary (generator A/Bs). The
+        # client is part of the workload definition: overridden results are
+        # not sweep-comparable, so the override is recorded in metadata.
+        self.bench_binary = bench_binary
 
         self.perf_stat_enabled = perf_stat_enabled
         self._is_last_rep = False
@@ -530,6 +539,8 @@ class PerfTaskRunner(BaseTaskRunner):
                 detailed_data["client_cpu"] = summarize_client_cpu(
                     self._client_cores_busy_per_rep, self._client_allocated_cores
                 )
+            if self.bench_binary:
+                detailed_data["bench_binary"] = self.bench_binary
 
             results = BenchmarkResults(
                 method=f"perf-{self.test.name}",
@@ -569,6 +580,8 @@ class PerfTaskRunner(BaseTaskRunner):
                 detailed_data["client_cpu"] = summarize_client_cpu(
                     self._client_cores_busy_per_rep, self._client_allocated_cores
                 )
+            if self.bench_binary:
+                detailed_data["bench_binary"] = self.bench_binary
 
             results = BenchmarkResults(
                 method=f"perf-{self.test.name}",
@@ -799,6 +812,7 @@ class PerfTaskRunner(BaseTaskRunner):
     ) -> str:
         """Build the numactl + valkey-benchmark command string."""
         net_numa = client._cpu_allocator.get_net_interface_numa(client.ip)
+        bench_bin = self.bench_binary or str(PROJECT_ROOT / VALKEY_BENCHMARK)
 
         # Dual-ENI real-NIC hairpin (docs/real-nic-hairpin.md): run the client
         # inside a network namespace holding the secondary ENI. The namespace
@@ -830,7 +844,7 @@ class PerfTaskRunner(BaseTaskRunner):
             membind = ",".join(map(str, override_nodes)) if override_nodes else str(net_numa)
             return (
                 f"{netns_prefix}numactl --physcpubind={self.benchmark_cpu_override} --membind={membind} "
-                f"{PROJECT_ROOT / VALKEY_BENCHMARK} -h {bench_target} -d {self.valsize} "
+                f"{bench_bin} -h {bench_target} -d {self.valsize} "
                 f"-r {keyspace} -c {self.bench_clients} -P {self.pipelining} "
                 f"--threads {self.bench_threads} -q -l -n {BENCHMARK_MAX_ITERATIONS} {self.test_command}"
             )
@@ -839,14 +853,14 @@ class PerfTaskRunner(BaseTaskRunner):
             benchmark_cpu_list = ",".join(map(str, allocated)) if allocated else ""
             return (
                 f"{netns_prefix}numactl --physcpubind={benchmark_cpu_list} --membind={net_numa} "
-                f"{PROJECT_ROOT / VALKEY_BENCHMARK} -h {bench_target} -d {self.valsize} "
+                f"{bench_bin} -h {bench_target} -d {self.valsize} "
                 f"-r {keyspace} -c {self.bench_clients} -P {self.pipelining} "
                 f"--threads {self.bench_threads} -q -l -n {BENCHMARK_MAX_ITERATIONS} {self.test_command}"
             )
         else:
             return (
                 f"{netns_prefix}numactl --cpunodebind={net_numa} --membind={net_numa} "
-                f"{PROJECT_ROOT / VALKEY_BENCHMARK} -h {bench_target} -d {self.valsize} "
+                f"{bench_bin} -h {bench_target} -d {self.valsize} "
                 f"-r {keyspace} -c {self.bench_clients} -P {self.pipelining} "
                 f"--threads {self.bench_threads} -q -l -n {BENCHMARK_MAX_ITERATIONS} {self.test_command}"
             )

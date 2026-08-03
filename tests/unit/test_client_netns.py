@@ -14,6 +14,7 @@ def _make_task(**overrides):
     task.test_command = "-t get"
     task.benchmark_cpu_override = ""
     task.client_netns = overrides.get("client_netns", "")
+    task.bench_binary = overrides.get("bench_binary", "")
     task.test = MagicMock()
     task.test.keyspace = None
     task._is_local_benchmark = lambda ip: ip in {"127.0.0.1", "localhost", "::1"}

@@ -169,6 +169,14 @@ def _add_perf_args(parser: argparse.ArgumentParser) -> None:
         "Empty = default namespace (loopback path).",
     )
     parser.add_argument(
+        "--bench-binary",
+        type=str,
+        default="",
+        help="Expert: absolute path to an alternative benchmark binary (generator A/Bs). "
+        "The client is part of the workload definition -- results are NOT comparable with "
+        "sweep history; the override is recorded in result metadata. Empty = repo default.",
+    )
+    parser.add_argument(
         "--server-args",
         default="",
         help="Extra raw server arguments appended to the valkey-server command line (e.g. '--io-threads-ownership yes'). Appended last, overriding generated defaults",
@@ -477,6 +485,7 @@ def handle_queue_add(args: argparse.Namespace) -> int:
             bench_threads=args.bench_threads,
             bench_clients=args.bench_clients,
             client_netns=args.client_netns,
+            bench_binary=args.bench_binary,
         )
         queue.submit_task(task)
 
@@ -492,6 +501,8 @@ def handle_queue_add(args: argparse.Namespace) -> int:
         print(f"  bench-threads={args.bench_threads or 'default'} bench-clients={args.bench_clients or 'default'}")
     if args.client_netns:
         print(f"  client-netns: {args.client_netns} (real-NIC hairpin path)")
+    if args.bench_binary:
+        print(f"  bench-binary: {args.bench_binary} (NOT sweep-comparable)")
     if args.note:
         print(f"  note: {args.note}")
     return 0
