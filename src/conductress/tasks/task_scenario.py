@@ -316,13 +316,18 @@ def build_overlay_command(
         # Continuous GETs against a DEDICATED large-value keyset (separate key prefix).
         # Measures how a legitimate heavyweight-read neighbor (large values) degrades
         # the background workload's throughput and latency.
-        # Uses valkey-benchmark with GET against the lvr: prefixed keyspace.
-        effective_size = overlay_value_size if overlay_value_size > 0 else LARGE_VALUE_READER_DEFAULT_SIZE
-        lvr_keyspace = LARGE_VALUE_READER_KEYSPACE
+        # MUST use memtier with the same --key-prefix/--key-minimum/--key-maximum
+        # as the prefill: valkey-benchmark's __rand_int__ zero-pads keys
+        # (lvr:000000000042) while memtier writes lvr:42 — mixing the two tools
+        # makes every overlay GET a miss and the neighbor weighs nothing.
         return (
-            f"{bench} -h {server_ip} -p {port} "
-            f"-c {conns} -n {n_requests} --threads {OVERLAY_THREADS} "
-            f"-r {lvr_keyspace} GET lvr:__rand_int__"
+            f"~/conductress/memtier_benchmark "
+            f"--server {server_ip} --port {port} --protocol redis "
+            f"--threads {OVERLAY_THREADS} --clients {OVERLAY_CLIENTS} "
+            f"--ratio 0:1 --key-pattern R:R "
+            f"--key-prefix lvr: "
+            f"--key-minimum 1 --key-maximum {LARGE_VALUE_READER_KEYSPACE} "
+            f"--requests {n_requests} --hide-histogram"
         )
 
     else:

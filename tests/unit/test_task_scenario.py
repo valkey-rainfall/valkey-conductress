@@ -1091,50 +1091,61 @@ class TestLargeValueReaderScenario:
         assert "large-value-reader" in SCENARIO_CHOICES
         assert validate_scenario("large-value-reader") is True
 
-    def test_overlay_command_uses_valkey_benchmark(self):
-        """large-value-reader overlay uses valkey-benchmark for GET."""
+    def test_overlay_command_uses_memtier(self):
+        """large-value-reader overlay uses memtier (SAME tool as prefill for key
+        format agreement; valkey-benchmark zero-pads __rand_int__ keys)."""
         cmd = build_overlay_command("large-value-reader", "127.0.0.1", 6379, 30, 3_000_000, 512)
-        assert "valkey-benchmark" in cmd
-        assert "GET" in cmd
-        assert "lvr:__rand_int__" in cmd
+        assert "memtier_benchmark" in cmd
+        assert "valkey-benchmark" not in cmd
+        assert "--ratio 0:1" in cmd  # GET-only
+        assert "--key-prefix lvr:" in cmd
 
     def test_overlay_command_uses_dedicated_keyspace(self):
-        """Overlay targets the dedicated lvr: prefixed keyspace, not background keys."""
+        """Overlay targets the dedicated lvr: keyspace with the SAME key range
+        as the prefill."""
         cmd = build_overlay_command("large-value-reader", "10.0.0.5", 7777, 60, 3_000_000, 512)
-        assert f"-r {LARGE_VALUE_READER_KEYSPACE}" in cmd
-        assert "lvr:" in cmd
-        # Should NOT reference the background keyspace size
-        assert "-r 3000000" not in cmd
+        assert "--key-minimum 1" in cmd
+        assert f"--key-maximum {LARGE_VALUE_READER_KEYSPACE}" in cmd
 
     def test_overlay_command_limited_connections(self):
-        """Overlay uses restricted thread/connection count."""
+        """Overlay uses restricted thread/client count (memtier convention)."""
         cmd = build_overlay_command("large-value-reader", "127.0.0.1", 6379, 30, 3_000_000, 512)
-        expected_conns = OVERLAY_THREADS * OVERLAY_CLIENTS
-        assert f"-c {expected_conns}" in cmd
         assert f"--threads {OVERLAY_THREADS}" in cmd
+        assert f"--clients {OVERLAY_CLIENTS}" in cmd
 
     def test_overlay_command_correct_host_port(self):
-        """Overlay targets the specified host and port."""
+        """Overlay targets the specified host and port (memtier flags)."""
         cmd = build_overlay_command("large-value-reader", "192.168.1.10", 6380, 30, 3_000_000, 512)
-        assert "-h 192.168.1.10" in cmd
-        assert "-p 6380" in cmd
+        assert "--server 192.168.1.10" in cmd
+        assert "--port 6380" in cmd
 
     def test_overlay_command_request_count_scales_with_duration(self):
         """Request count is proportional to duration (50K/s target)."""
         cmd_short = build_overlay_command("large-value-reader", "127.0.0.1", 6379, 10, 3_000_000, 512)
         cmd_long = build_overlay_command("large-value-reader", "127.0.0.1", 6379, 60, 3_000_000, 512)
-        # 10s * 50000 = 500000, 60s * 50000 = 3000000
-        assert "-n 500000" in cmd_short
-        assert "-n 3000000" in cmd_long
+        assert "--requests 500000" in cmd_short
+        assert "--requests 3000000" in cmd_long
 
     def test_overlay_value_size_param_accepted(self):
-        """overlay_value_size parameter is passed through (used for prefill, not in GET cmd)."""
-        # The overlay_value_size affects the prefill, not the GET command itself
+        """overlay_value_size affects the prefill, not the GET command."""
         cmd = build_overlay_command(
             "large-value-reader", "127.0.0.1", 6379, 30, 3_000_000, 512, overlay_value_size=20480
         )
-        assert "valkey-benchmark" in cmd
-        assert "GET" in cmd
+        assert "memtier_benchmark" in cmd
+
+    def test_key_format_agreement_regression(self):
+        """REGRESSION (review, Aug 21): prefill (memtier SET) and overlay (GET)
+        must use the same tool and key contract. valkey-benchmark zero-pads
+        __rand_int__ keys (lvr:000000000042) while memtier writes lvr:42 —
+        mixing tools makes every overlay GET a miss and the neighbor weighs
+        nothing."""
+        cmd = build_overlay_command("large-value-reader", "10.0.0.1", 6379, 30, 3_000_000, 512)
+        assert "memtier_benchmark" in cmd
+        assert "valkey-benchmark" not in cmd
+        assert "--key-prefix lvr:" in cmd
+        assert "--key-minimum 1" in cmd
+        assert f"--key-maximum {LARGE_VALUE_READER_KEYSPACE}" in cmd
+        assert "--ratio 0:1" in cmd
 
     @pytest.fixture(autouse=True)
     def patch_sources(self):
