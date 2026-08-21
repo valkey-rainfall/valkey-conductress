@@ -5,13 +5,18 @@ on: [push, pull_request, merge_group]
 jobs:
   dco:
     runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request'
+    # Runs on pull_request AND merge_group. A required check that SKIPS under
+    # merge_group stalls the queue forever, so for merge_group events the DCO
+    # was already verified on the PR — the steps below no-op to success.
+    if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
     steps:
       - uses: actions/checkout@v4
+        if: github.event_name == 'pull_request'
         with:
           fetch-depth: 0
           ref: ${{ github.event.pull_request.head.sha }}
       - name: Check DCO signoff
+        if: github.event_name == 'pull_request'
         run: |
           base=${{ github.event.pull_request.base.sha }}
           for sha in $(git rev-list $base..HEAD); do
