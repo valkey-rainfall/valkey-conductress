@@ -40,7 +40,20 @@ from conductress.tasks.task_mixed import (
 logger = logging.getLogger(__name__)
 
 # Valid scenario names
-SCENARIO_CHOICES = ("eval-storm", "scan-churn", "multi-exec", "flushall-spike", "expiry-heavy", "bgsave")
+SCENARIO_CHOICES = (
+    "eval-storm",
+    "scan-churn",
+    "multi-exec",
+    "flushall-spike",
+    "expiry-heavy",
+    "bgsave",
+    "large-value-reader",
+)
+
+# Default value size for the large-value-reader overlay's dedicated keyset (bytes)
+LARGE_VALUE_READER_DEFAULT_SIZE = 10240  # 10 KB
+# Dedicated keyset size for the large-value-reader overlay (separate from background keyspace)
+LARGE_VALUE_READER_KEYSPACE = 50000
 
 # Overlay thread/connection counts (kept small to avoid dominating the load)
 OVERLAY_THREADS = 2
@@ -206,12 +219,17 @@ def build_overlay_command(
     duration: int,
     keyspace: int,
     val_size: int,
+    overlay_value_size: int = 0,
 ) -> str:
     """Build the overlay command string for a given scenario.
 
     Returns a shell command that drives the pathological workload.
     Uses valkey-benchmark for repeatable load generation with arbitrary commands.
     Fallback to valkey-cli loops only where multi-step transactions require it.
+
+    Args:
+        overlay_value_size: For large-value-reader, the value size of the dedicated
+            keyset (bytes). Ignored for other scenarios.
     """
     bench = "~/conductress/valkey-benchmark"
     cli = "~/conductress/valkey-cli"
@@ -294,6 +312,19 @@ def build_overlay_command(
         bgsave_delay = max(2, duration * 2 // 5)
         return f"bash -c 'sleep {bgsave_delay}; {cli} -h {server_ip} -p {port} BGSAVE'"
 
+    elif scenario == "large-value-reader":
+        # Continuous GETs against a DEDICATED large-value keyset (separate key prefix).
+        # Measures how a legitimate heavyweight-read neighbor (large values) degrades
+        # the background workload's throughput and latency.
+        # Uses valkey-benchmark with GET against the lvr: prefixed keyspace.
+        effective_size = overlay_value_size if overlay_value_size > 0 else LARGE_VALUE_READER_DEFAULT_SIZE
+        lvr_keyspace = LARGE_VALUE_READER_KEYSPACE
+        return (
+            f"{bench} -h {server_ip} -p {port} "
+            f"-c {conns} -n {n_requests} --threads {OVERLAY_THREADS} "
+            f"-r {lvr_keyspace} GET lvr:__rand_int__"
+        )
+
     else:
         raise ValueError(f"Unknown scenario: {scenario}")
 
@@ -314,6 +345,7 @@ class ScenarioTaskData(BaseTaskData):
     benchmark_cpu_override: str = ""
     background_set_ratio: int = 0
     server_args: str = ""  # extra raw args appended to the server command line (override defaults)
+    overlay_value_size: int = 0  # value size for the large-value-reader overlay keyset (0 = default 10KB)
 
     def __post_init__(self):
         super().__post_init__()
@@ -322,16 +354,22 @@ class ScenarioTaskData(BaseTaskData):
             raise ValueError(f"Unknown scenario '{self.scenario}'. Valid: {', '.join(SCENARIO_CHOICES)}")
         if not (0 <= self.background_set_ratio <= 100):
             raise ValueError(f"background_set_ratio must be 0-100, got {self.background_set_ratio}")
+        if self.overlay_value_size < 0:
+            raise ValueError(f"overlay_value_size must be >= 0, got {self.overlay_value_size}")
 
     def short_description(self) -> str:
         from conductress.utility import HumanByte, HumanTime
 
         ratio_str = f" SET={self.background_set_ratio}%" if self.background_set_ratio > 0 else ""
+        lvr_str = ""
+        if self.scenario == "large-value-reader":
+            effective_size = self.overlay_value_size if self.overlay_value_size > 0 else LARGE_VALUE_READER_DEFAULT_SIZE
+            lvr_str = f" ovl={HumanByte.to_human(effective_size)}"
         return (
             f"scenario:{self.scenario} "
             f"v={HumanByte.to_human(self.val_size)} "
             f"io={self.io_threads} P={self.pipelining}"
-            f"{ratio_str} "
+            f"{ratio_str}{lvr_str} "
             f"{HumanTime.to_human(self.duration)}"
             f"{' perf-stat' if self.perf_stat_enabled else ''}"
         )
@@ -356,6 +394,7 @@ class ScenarioTaskData(BaseTaskData):
             benchmark_cpu_override=self.benchmark_cpu_override,
             background_set_ratio=self.background_set_ratio,
             server_args=self.server_args,
+            overlay_value_size=self.overlay_value_size,
         )
 
 
@@ -382,6 +421,7 @@ class ScenarioTaskRunner(BaseTaskRunner):
         benchmark_cpu_override: str = "",
         background_set_ratio: int = 0,
         server_args: str = "",
+        overlay_value_size: int = 0,
     ):
         super().__init__(task_name)
         self.server_infos = server_infos
@@ -401,6 +441,7 @@ class ScenarioTaskRunner(BaseTaskRunner):
         self.benchmark_cpu_override = benchmark_cpu_override
         self.background_set_ratio = background_set_ratio
         self.server_args = server_args
+        self.overlay_value_size = overlay_value_size
 
         self.commit_hash = ""
         self._profile_internals = should_profile_internals(get_sweep_engine(source))
@@ -525,6 +566,25 @@ class ScenarioTaskRunner(BaseTaskRunner):
                     f"--hide-histogram"
                 )
                 await server.run_host_command(prefill_cmd)
+
+                # Prefill dedicated large-value keyset for large-value-reader overlay
+                if self.scenario == "large-value-reader":
+                    effective_lvr_size = (
+                        self.overlay_value_size if self.overlay_value_size > 0 else LARGE_VALUE_READER_DEFAULT_SIZE
+                    )
+                    lvr_prefill_cmd = (
+                        f"~/conductress/memtier_benchmark "
+                        f"--server {server.ip} --port {server.port} --protocol redis "
+                        f"--threads {OVERLAY_THREADS} --clients {OVERLAY_CLIENTS} "
+                        f"--ratio 1:0 --key-pattern P:P "
+                        f"--key-prefix lvr: "
+                        f"--key-minimum 1 --key-maximum {LARGE_VALUE_READER_KEYSPACE} "
+                        f"--data-size {effective_lvr_size} "
+                        f"--requests {LARGE_VALUE_READER_KEYSPACE // (OVERLAY_THREADS * OVERLAY_CLIENTS)} "
+                        f"--hide-histogram"
+                    )
+                    await server.run_host_command(lvr_prefill_cmd)
+
                 self.status.steps_completed = rep * 3 + 1
                 self.file_protocol.write_status(self.status)
 
@@ -543,6 +603,7 @@ class ScenarioTaskRunner(BaseTaskRunner):
                         duration=self.duration,
                         keyspace=MIXED_KEYSPACE,
                         val_size=self.val_size,
+                        overlay_value_size=self.overlay_value_size,
                     )
                     overlay_pid = await self._run_overlay(server, overlay_cmd)
 
@@ -691,6 +752,12 @@ class ScenarioTaskRunner(BaseTaskRunner):
             "ci_95": ci_95,
             "scenario_metrics": agg_scenario,
         }
+        if self.scenario == "large-value-reader":
+            effective_lvr_size = (
+                self.overlay_value_size if self.overlay_value_size > 0 else LARGE_VALUE_READER_DEFAULT_SIZE
+            )
+            detailed_data["overlay_value_size"] = effective_lvr_size
+            detailed_data["overlay_keyspace"] = LARGE_VALUE_READER_KEYSPACE
         if perf_counters:
             detailed_data["perf_counters"] = perf_counters
             detailed_data["perf_duration_seconds"] = float(self.duration)

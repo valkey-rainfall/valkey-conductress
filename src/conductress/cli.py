@@ -311,10 +311,19 @@ def build_parser() -> argparse.ArgumentParser:
     scenario_parser.add_argument(
         "--scenario",
         required=True,
-        choices=["eval-storm", "scan-churn", "multi-exec", "flushall-spike", "expiry-heavy", "bgsave"],
+        choices=[
+            "eval-storm",
+            "scan-churn",
+            "multi-exec",
+            "flushall-spike",
+            "expiry-heavy",
+            "bgsave",
+            "large-value-reader",
+        ],
         help="Pathological workload scenario to run. 'bgsave' fires a single BGSAVE at ~40%% of "
         "duration; fork+COW impact shows up in the interval timeseries. Dataset size (prefill) "
-        "drives the fork cost.",
+        "drives the fork cost. 'large-value-reader' measures how continuous large-value GETs "
+        "from a dedicated keyset degrade background workload throughput/latency.",
     )
     scenario_parser.add_argument("--source", default="valkey", help="Repository source name (default: valkey)")
     scenario_parser.add_argument("--specifier", default="unstable", help="Branch, tag, or commit (default: unstable)")
@@ -370,6 +379,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Percentage of SET commands in background load (0-100, default 0 = pure GET). "
         "Higher values add write pressure alongside the scenario overlay. "
         "0 preserves comparability with existing pure-GET baselines.",
+    )
+    scenario_parser.add_argument(
+        "--overlay-value-size",
+        type=int,
+        default=0,
+        help="Value size in bytes for the large-value-reader overlay's dedicated keyset "
+        "(default: 10240 = 10KB). Only used when --scenario=large-value-reader; ignored otherwise.",
     )
 
     # queue add-latency
@@ -791,6 +807,13 @@ def handle_queue_add_scenario(args: argparse.Namespace) -> int:
         )
         return 1
 
+    if args.overlay_value_size < 0:
+        print(
+            f"Error: --overlay-value-size must be >= 0, got {args.overlay_value_size}",
+            file=sys.stderr,
+        )
+        return 1
+
     queue = TaskQueue()
     task = ScenarioTaskData(
         source=args.source,
@@ -810,6 +833,7 @@ def handle_queue_add_scenario(args: argparse.Namespace) -> int:
         benchmark_cpu_override=args.client_cpus,
         server_args=args.server_args,
         background_set_ratio=args.background_set_ratio,
+        overlay_value_size=args.overlay_value_size,
     )
     queue.submit_task(task)
 
@@ -819,6 +843,8 @@ def handle_queue_add_scenario(args: argparse.Namespace) -> int:
     print(f"  duration={duration}s reps={args.repetitions}")
     if args.background_set_ratio > 0:
         print(f"  background-set-ratio={args.background_set_ratio}%")
+    if args.overlay_value_size > 0:
+        print(f"  overlay-value-size={args.overlay_value_size}B")
     if args.server_args:
         print(f"  server-args: {args.server_args}")
     if args.note:
