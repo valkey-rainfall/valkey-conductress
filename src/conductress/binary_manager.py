@@ -101,33 +101,6 @@ class BinaryManager:
     async def _is_binary_cached(self) -> bool:
         return await self._host.check_file_exists(self.get_cached_build_path() / self.binary_name)
 
-    async def _binary_references_lua_module(self, binary_path: Path) -> bool:
-        """Check whether a binary dlopens the dynamic Lua engine module.
-
-        Only module-mode builds embed the literal soname (via -DLUA_LIB);
-        static-Lua and pre-modularization builds do not, so a plain grep on
-        the binary is a reliable discriminator.
-        """
-        out, _ = await self._host.run_host_command(
-            f"grep -qs {LUA_MODULE} {binary_path} && echo 1 || echo 0", check=False
-        )
-        return out.strip() == "1"
-
-    async def _is_build_cache_complete(self) -> bool:
-        """Check the cache entry has the binary AND every runtime artifact it needs.
-
-        Entries cached before the Lua-module fix hold only the server binary;
-        if that binary needs libvalkeylua.so, treat the entry as a miss so it
-        is rebuilt with the module included (lazy self-heal of poisoned
-        entries).
-        """
-        cached_binary_path = self.get_cached_build_path() / self.binary_name
-        if not await self._host.check_file_exists(cached_binary_path):
-            return False
-        if await self._binary_references_lua_module(cached_binary_path):
-            return await self._host.check_file_exists(self.get_cached_build_path() / LUA_MODULE)
-        return True
-
     async def _normalize_specifier(self, specifier: Optional[str]) -> str:
         """Resolve a specifier to a valid git ref. Fetches from origin first."""
         source_path = self.get_source_binary_path()
@@ -160,7 +133,7 @@ class BinaryManager:
         cached_build_path = self.get_cached_build_path()
         cached_binary_path = cached_build_path / self.binary_name
 
-        if not await self._is_build_cache_complete():
+        if not await self._is_binary_cached():
             self._logger.info("building %s:%s...", self.source, self.specifier)
             try:
                 # MAKEFLAGS= prevents -j from being inherited into the
@@ -181,7 +154,6 @@ class BinaryManager:
                 fallback = "redis-server" if self.binary_name == VALKEY_BINARY else VALKEY_BINARY
                 build_binary = source_path / fallback
             await self._host.run_host_command(f"mkdir -p {cached_build_path}")
-            await self._host.run_host_command(f"cp {build_binary} {cached_binary_path}")
             # Module-mode builds produce a dynamic Lua engine the server
             # dlopens at startup. Cache it next to the binary, then REMOVE it
             # from the shared source tree: the binary's DT_RPATH points into
@@ -190,11 +162,18 @@ class BinaryManager:
             # load the wrong module. With the tree copy gone, the RPATH
             # lookup misses and LD_LIBRARY_PATH (set at server launch to the
             # cache dir) resolves the correct per-commit copy.
+            #
+            # ORDERING MATTERS: runtime artifacts are cached BEFORE the
+            # binary. The binary's presence is the cache-hit marker, so
+            # writing it last means an interrupted build leaves an entry
+            # that reads as a cache miss -- never a binary without its
+            # module (which would boot-crash on every future cache hit).
             module_src = source_path / LUA_MODULE_SRC_RELPATH
             if await self._host.check_file_exists(module_src):
                 await self._host.run_host_command(
                     f"cp {module_src} {cached_build_path}/{LUA_MODULE} && rm -f {module_src}"
                 )
+            await self._host.run_host_command(f"cp {build_binary} {cached_binary_path}")
 
         return cached_binary_path
 

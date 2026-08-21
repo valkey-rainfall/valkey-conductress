@@ -40,7 +40,6 @@ class TestCacheHitSkipsBuild:
                 ("refs/remotes/origin/unstable\n", ""),  # rev-parse
                 ("", ""),  # git reset --hard
                 ("abc123def456\n", ""),  # git rev-parse HEAD
-                ("0\n", ""),  # grep: binary does not reference lua module
             ]
         )
 
@@ -155,7 +154,6 @@ class TestEnsureBinaryCached:
                 ("refs/remotes/origin/main\n", ""),  # rev-parse
                 ("", ""),  # git reset
                 ("deadbeef\n", ""),  # rev-parse HEAD
-                ("0\n", ""),  # grep: binary does not reference lua module
             ]
         )
 
@@ -176,6 +174,11 @@ class TestLuaModuleCaching:
     perf-sweep (280 coredumps, Jul-Aug 2026). Worse, the binary's DT_RPATH
     points into the shared source tree, so a leftover tree .so from a
     different commit would load silently.
+
+    Pre-existing half-cached entries are cleaned up eagerly at deploy time
+    (one-shot sweep); there is no lazy self-heal. Correctness going forward
+    relies on write ordering: runtime artifacts are cached before the binary,
+    whose presence is the cache-hit marker.
     """
 
     @pytest.mark.asyncio
@@ -205,48 +208,32 @@ class TestLuaModuleCaching:
         )
 
     @pytest.mark.asyncio
-    async def test_poisoned_cache_entry_triggers_rebuild(self, manager, mock_host):
-        """A pre-fix cache entry (module-era binary, no cached .so) must be
-        treated as a cache miss so it is rebuilt with the module included."""
+    async def test_module_cached_before_binary(self, manager, mock_host):
+        """The binary must be the LAST artifact written to the cache entry.
+
+        Its presence is the cache-hit marker: writing it last guarantees an
+        interrupted build reads as a cache miss, never as a binary without
+        its module (which would boot-crash on every future cache hit)."""
 
         async def check(path):
             s = str(path)
-            if "build_cache" in s and s.endswith("libvalkeylua.so"):
-                return False  # module NOT cached (poisoned entry)
-            return True  # cached binary and tree files exist
+            if s.endswith("modules/lua/libvalkeylua.so"):
+                return True
+            if "build_cache" in s:
+                return False
+            return True
 
         mock_host.check_file_exists = AsyncMock(side_effect=check)
-
-        async def run(command, check=True):
-            if command.startswith("grep"):
-                return ("1\n", "")  # binary references the lua module
-            return ("abc123\n", "")
-
-        mock_host.run_host_command = AsyncMock(side_effect=run)
+        mock_host.run_host_command = AsyncMock(return_value=("abc123\n", ""))
 
         await manager._ensure_build_cached()
 
         commands = [call[0][0] for call in mock_host.run_host_command.call_args_list]
-        assert any("make" in cmd for cmd in commands), (
-            "poisoned cache entry (binary needs libvalkeylua.so but module not " "cached) must trigger a rebuild"
+        module_idx = next(i for i, c in enumerate(commands) if "libvalkeylua.so" in c and "cp " in c)
+        binary_idx = next(i for i, c in enumerate(commands) if c.startswith("cp ") and "libvalkeylua.so" not in c)
+        assert module_idx < binary_idx, (
+            f"module must be cached before the binary (module at {module_idx}, " f"binary at {binary_idx}): {commands}"
         )
-
-    @pytest.mark.asyncio
-    async def test_complete_module_entry_skips_build(self, manager, mock_host):
-        """A cache entry holding both the binary and its module is a hit."""
-        mock_host.check_file_exists = AsyncMock(return_value=True)
-
-        async def run(command, check=True):
-            if command.startswith("grep"):
-                return ("1\n", "")  # binary references the lua module
-            return ("abc123\n", "")
-
-        mock_host.run_host_command = AsyncMock(side_effect=run)
-
-        await manager._ensure_build_cached()
-
-        commands = [call[0][0] for call in mock_host.run_host_command.call_args_list]
-        assert not any("make" in cmd for cmd in commands)
 
 
 class TestMakeArgsAffectCacheKey:
