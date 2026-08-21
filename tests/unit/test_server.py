@@ -145,3 +145,41 @@ class TestServerInit:
         assert server.source is None
         assert server.hash is None
         assert server.ssh is None
+
+
+class TestStartCommandLoaderPath:
+    """Regression test for the libvalkeylua.so boot-crash fix (launch side).
+
+    Module-era valkey binaries dlopen libvalkeylua.so; the module is cached
+    next to the binary, and the launch command must point the dynamic loader
+    at the cache dir so the per-commit copy resolves.
+    """
+
+    @pytest.mark.asyncio
+    async def test_ld_library_path_points_at_cache_dir(self, monkeypatch):
+        from unittest.mock import AsyncMock
+
+        from conductress import config
+
+        server = Server("127.0.0.1", port=7777)
+        commands: list[str] = []
+
+        async def fake_run(cmd, check=True):
+            commands.append(cmd)
+            return ("123\n", "")
+
+        monkeypatch.setattr(server, "run_host_command", fake_run)
+        monkeypatch.setattr(server, "_Server__pre_start", AsyncMock())
+        monkeypatch.setattr(server, "_allocate_server_cpus", AsyncMock(return_value=[0, 1, 2, 3]))
+        monkeypatch.setattr(server, "wait_until_ready", AsyncMock())
+        monkeypatch.setattr(config, "check_feature", lambda _feature: False)
+
+        cached_binary = Path("~/build_cache/valkey/abc123/deadbeef/valkey-server")
+        await server.start(cached_binary, io_threads=1)
+
+        launch_cmds = [c for c in commands if "valkey-server" in c and "--port" in c]
+        assert launch_cmds, f"no launch command captured: {commands}"
+        assert f"LD_LIBRARY_PATH={cached_binary.parent}" in launch_cmds[0], (
+            "launch command must set LD_LIBRARY_PATH to the cache dir so the "
+            "cached libvalkeylua.so resolves for module-era binaries"
+        )

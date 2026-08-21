@@ -40,6 +40,7 @@ class TestCacheHitSkipsBuild:
                 ("refs/remotes/origin/unstable\n", ""),  # rev-parse
                 ("", ""),  # git reset --hard
                 ("abc123def456\n", ""),  # git rev-parse HEAD
+                ("0\n", ""),  # grep: binary does not reference lua module
             ]
         )
 
@@ -154,6 +155,7 @@ class TestEnsureBinaryCached:
                 ("refs/remotes/origin/main\n", ""),  # rev-parse
                 ("", ""),  # git reset
                 ("deadbeef\n", ""),  # rev-parse HEAD
+                ("0\n", ""),  # grep: binary does not reference lua module
             ]
         )
 
@@ -163,6 +165,88 @@ class TestEnsureBinaryCached:
         assert mgr.specifier == "main"
         assert mgr.make_args == ""
         assert mgr.hash == "deadbeef"
+
+
+class TestLuaModuleCaching:
+    """Regression tests for the missing-libvalkeylua.so build-cache bug.
+
+    Module-era valkey commits (valkey-io#2858..#3392) dlopen libvalkeylua.so
+    at startup and SIGABRT if it is missing. The cache used to store only the
+    server binary, so every cached module-era commit boot-crashed in the
+    perf-sweep (280 coredumps, Jul-Aug 2026). Worse, the binary's DT_RPATH
+    points into the shared source tree, so a leftover tree .so from a
+    different commit would load silently.
+    """
+
+    @pytest.mark.asyncio
+    async def test_module_artifact_cached_and_removed_from_tree(self, manager, mock_host):
+        """After a build that produced libvalkeylua.so, the module must be copied
+        into the cache dir and deleted from the shared source tree."""
+
+        async def check(path):
+            s = str(path)
+            if s.endswith("modules/lua/libvalkeylua.so"):
+                return True  # build produced the module in the tree
+            if "build_cache" in s:
+                return False  # nothing cached yet -> build
+            return True  # tree build output exists
+
+        mock_host.check_file_exists = AsyncMock(side_effect=check)
+        mock_host.run_host_command = AsyncMock(return_value=("abc123\n", ""))
+
+        await manager._ensure_build_cached()
+
+        commands = [call[0][0] for call in mock_host.run_host_command.call_args_list]
+        module_cmds = [cmd for cmd in commands if "libvalkeylua.so" in cmd and "cp " in cmd]
+        assert module_cmds, f"module artifact was not cached; commands: {commands}"
+        assert any("rm -f" in cmd for cmd in module_cmds), (
+            "tree copy of libvalkeylua.so must be removed after caching "
+            "(DT_RPATH would silently load a wrong-commit module otherwise)"
+        )
+
+    @pytest.mark.asyncio
+    async def test_poisoned_cache_entry_triggers_rebuild(self, manager, mock_host):
+        """A pre-fix cache entry (module-era binary, no cached .so) must be
+        treated as a cache miss so it is rebuilt with the module included."""
+
+        async def check(path):
+            s = str(path)
+            if "build_cache" in s and s.endswith("libvalkeylua.so"):
+                return False  # module NOT cached (poisoned entry)
+            return True  # cached binary and tree files exist
+
+        mock_host.check_file_exists = AsyncMock(side_effect=check)
+
+        async def run(command, check=True):
+            if command.startswith("grep"):
+                return ("1\n", "")  # binary references the lua module
+            return ("abc123\n", "")
+
+        mock_host.run_host_command = AsyncMock(side_effect=run)
+
+        await manager._ensure_build_cached()
+
+        commands = [call[0][0] for call in mock_host.run_host_command.call_args_list]
+        assert any("make" in cmd for cmd in commands), (
+            "poisoned cache entry (binary needs libvalkeylua.so but module not " "cached) must trigger a rebuild"
+        )
+
+    @pytest.mark.asyncio
+    async def test_complete_module_entry_skips_build(self, manager, mock_host):
+        """A cache entry holding both the binary and its module is a hit."""
+        mock_host.check_file_exists = AsyncMock(return_value=True)
+
+        async def run(command, check=True):
+            if command.startswith("grep"):
+                return ("1\n", "")  # binary references the lua module
+            return ("abc123\n", "")
+
+        mock_host.run_host_command = AsyncMock(side_effect=run)
+
+        await manager._ensure_build_cached()
+
+        commands = [call[0][0] for call in mock_host.run_host_command.call_args_list]
+        assert not any("make" in cmd for cmd in commands)
 
 
 class TestMakeArgsAffectCacheKey:

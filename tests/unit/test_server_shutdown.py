@@ -115,7 +115,11 @@ class TestServerEnvPrefix:
         assert "/usr/bin/valkey-server" in start_cmd
 
     async def test_start_without_env_prefix(self):
-        """Without env_prefix, command starts directly with binary path."""
+        """Without env_prefix, command starts with the loader path then the binary.
+
+        LD_LIBRARY_PATH always points at the cached build dir so module-era
+        valkey binaries can dlopen their cached libvalkeylua.so.
+        """
         server = Server.__new__(Server)
         server.port = 9000
         server.ip = "127.0.0.1"
@@ -154,4 +158,4 @@ class TestServerEnvPrefix:
             await server.start(Path("/usr/bin/valkey-server"), io_threads=1)
 
         start_cmd = commands_run[0]
-        assert start_cmd.startswith("/usr/bin/valkey-server")
+        assert start_cmd.startswith("LD_LIBRARY_PATH=/usr/bin /usr/bin/valkey-server")

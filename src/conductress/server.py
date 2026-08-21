@@ -523,6 +523,14 @@ class Server:
             command = f"numactl --membind={numa_node} {command}"
             logging.info("Binding memory to NUMA node %d", numa_node)
 
+        # Make the cache dir visible to the dynamic loader: module-era valkey
+        # builds dlopen libvalkeylua.so, which is cached next to the binary.
+        # (Their DT_RPATH points into the shared source tree, but the build
+        # step removes the tree copy after caching, so the RPATH lookup misses
+        # and this takes effect.) Placed OUTSIDE the numactl wrap -- numactl
+        # does not accept env assignments as its command.
+        command = f"LD_LIBRARY_PATH={cached_binary_path.parent} {command}"
+
         # Prepend environment variables if specified (e.g. jemalloc profiling)
         if env_prefix:
             command = f"{env_prefix} {command}"
