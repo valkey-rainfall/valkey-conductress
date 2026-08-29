@@ -16,6 +16,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+control = [
+    "aiohttp==3.10.11",
+    "jsonschema==4.23.0",
+]
 dev = [
     "black>=23.0,<25.0",
     "flake8>=6.0,<8.0",
@@ -30,9 +34,13 @@ dev = [
 
 [project.scripts]
 conductress = "conductress.__main__:main"
+conductress-control = "conductress.control.__main__:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+"conductress.schemas" = ["*.json"]
 
 [tool.black]
 line-length = 120

@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://conductress.dev/schemas/task-envelope-v1.json",
+  "title": "Conductress remote task envelope",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "task_id", "runner_id", "task_class", "priority", "submitted_at", "submitted_by", "task"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "task_id": {"type": "string", "minLength": 1},
+    "runner_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"},
+    "task_class": {"enum": ["manual", "canary", "sweep"]},
+    "priority": {"type": "integer"},
+    "submitted_at": {"type": "string", "format": "date-time"},
+    "submitted_by": {"type": "string", "minLength": 1},
+    "canary_id": {"type": ["string", "null"]},
+    "task": {
+      "type": "object",
+      "required": ["task_type", "source", "specifier", "timestamp"],
+      "properties": {"task_type": {"type": "string", "minLength": 1}},
+      "additionalProperties": true
+    }
+  }
+}
