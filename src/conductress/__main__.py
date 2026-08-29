@@ -50,6 +50,8 @@ def main() -> None:
     subparsers.add_parser("setup", help="Run setup/bootstrap")
     subparsers.add_parser("queue", help="Manage the task queue (list, add, remove)", add_help=False)
     subparsers.add_parser("compare", help="Run analysis/comparison")
+    runner_info_parser = subparsers.add_parser("runner-info", help="Show stable runner identity and environment")
+    runner_info_parser.add_argument("--json", action="store_true", help="Emit versioned machine-readable JSON")
     subparsers.add_parser("status", help="Show runner and task status (non-blocking)")
     status_export_parser = subparsers.add_parser("status-export", help="Export status to JSON for remote monitoring")
     status_export_parser.add_argument(
@@ -203,6 +205,23 @@ def main() -> None:
         from conductress.analysis import main as analysis_main
 
         sys.exit(analysis_main(remaining))
+
+    elif args.command == "runner-info":
+        import json
+
+        from conductress.runner_identity import get_runner_info
+
+        info = get_runner_info()
+        if args.json:
+            print(json.dumps(info, indent=2, sort_keys=True))
+        else:
+            environment = info["environment"]
+            print(f"Runner:      {info['runner_id']} ({info['display_name']})")
+            print(f"Platform:    {info['platform']['label']}")
+            print(f"Hostname:    {info['hostname']}")
+            print(f"Fingerprint: {environment['host_fingerprint']}")
+            print(f"Kernel:      {environment['kernel_release']}")
+            print(f"Conductress: {environment['conductress_revision']}")
 
     elif args.command == "status":
         from conductress.status import print_status

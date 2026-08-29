@@ -25,6 +25,7 @@ from conductress.config import (
 )
 from conductress.file_protocol import BenchmarkStatus
 from conductress.replication_group import ReplicationGroup
+from conductress.runner_identity import get_result_provenance
 from conductress.server import Server
 from conductress.task_queue import BaseTaskData, BaseTaskRunner
 from conductress.tasks.task_mixed import set_ratio_to_memtier_ratio
@@ -304,6 +305,7 @@ class LatencyTaskRunner(BaseTaskRunner):
             "score": result["p99_us"],  # p99 is the primary bisection metric
             "data": detailed_data,
         }
+        entry.update(get_result_provenance())
         with open(output_file, "a") as f:
             f.write(json.dumps(entry) + "\n")
 

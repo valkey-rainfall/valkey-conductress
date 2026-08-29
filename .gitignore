@@ -1,6 +1,7 @@
 *.pem
 *.pyc
 servers.json
+runner.json
 valkey-benchmark
 valkey-cli
 log.txt

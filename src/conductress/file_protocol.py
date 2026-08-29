@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from .config import CONDUCTRESS_OUTPUT, CONDUCTRESS_RESULTS, CONDUCTRESS_TMP, get_all_features
+from .runner_identity import get_result_provenance
 from .utility import datetime_to_task_id
 
 logger = logging.getLogger(__name__)
@@ -159,6 +160,7 @@ class FileProtocol:
             data = asdict(results)
             data["task_id"] = self.task_id
             data["end_time"] = datetime_to_task_id(results.end_time)
+            data.update(get_result_provenance())
             f.write(json.dumps(data))
             f.write("\n")
 

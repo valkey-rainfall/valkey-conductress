@@ -132,3 +132,46 @@ class TestNoSubcommand:
         assert exc_info.value.code == 0
         captured = capsys.readouterr()
         assert "usage:" in captured.out.lower() or "Usage:" in captured.out
+
+
+class TestRunnerInfoSubcommand:
+    RUNNER_INFO = {
+        "schema_version": 1,
+        "runner_id": "armbench",
+        "display_name": "Graviton 3",
+        "hostname": "host-a",
+        "platform": {
+            "id": "arm64",
+            "label": "arm64/c7g.metal/graviton3",
+            "aliases": ["graviton3", "arm64"],
+        },
+        "environment": {
+            "host_fingerprint": "abc123",
+            "instance_id": "i-test",
+            "kernel_release": "6.1-test",
+            "machine": "aarch64",
+            "cpu_model": "Neoverse-V1",
+            "conductress_revision": "deadbeef",
+        },
+    }
+
+    @patch("sys.argv", ["conductress", "runner-info", "--json"])
+    @patch("conductress.__main__.logging")
+    def test_json_output_is_machine_readable(self, mock_logging, capsys):
+        import json
+
+        with patch("conductress.runner_identity.get_runner_info", return_value=self.RUNNER_INFO):
+            main()
+
+        assert json.loads(capsys.readouterr().out) == self.RUNNER_INFO
+
+    @patch("sys.argv", ["conductress", "runner-info"])
+    @patch("conductress.__main__.logging")
+    def test_human_output_contains_identity(self, mock_logging, capsys):
+        with patch("conductress.runner_identity.get_runner_info", return_value=self.RUNNER_INFO):
+            main()
+
+        output = capsys.readouterr().out
+        assert "armbench" in output
+        assert "arm64/c7g.metal/graviton3" in output
+        assert "abc123" in output

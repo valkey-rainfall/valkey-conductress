@@ -13,14 +13,15 @@ Conductress assumes a separate machine (or machines) to run `valkey-server`, dis
 1. Install Git and Python 3.9+
 2. Clone this repo to `~/conductress`
 3. Review `src/config.py` and edit as needed
-4. Optionally create `servers.json` to add remote servers (see `servers.default.json` for format). Localhost is used by default.
-5. Copy an SSH keyfile to `~/conductress/server-keyfile.pem` for remote server access
-6. Run setup:
+4. Copy `runner.default.json` to the ignored local `runner.json` and assign this installation a stable `runner_id`
+5. Optionally create `servers.json` to add remote servers (see `servers.default.json` for format). Localhost is used by default.
+6. Copy an SSH keyfile to `~/conductress/server-keyfile.pem` for remote server access
+7. Run setup:
    ```bash
    python -m src setup
    ```
    This installs system packages, pip dependencies, and configures servers. It may prompt you to make manual fixes, and you may need to run it more than once if it installs its own dependencies.
-7. Launch the TUI or start queuing tasks via CLI (see below)
+8. Launch the TUI or start queuing tasks via CLI (see below)
 
 ## Unified Entry Point
 
@@ -39,6 +40,7 @@ python -m src <subcommand>
 | `setup`    | Run the setup/bootstrap script to configure servers |
 | `queue`    | Manage the task queue (add, list, remove, clear) |
 | `compare`  | Run statistical comparison between two specifiers |
+| `runner-info` | Show stable runner identity and environment (`--json` for automation) |
 | `status`   | Show runner and task status (non-blocking) |
 
 Running `python -m src` without a subcommand prints usage information.

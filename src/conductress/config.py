@@ -30,6 +30,10 @@ DEFAULT_KEY_SIZE = 0  # 0 = standard keys
 # Dashboard data server (rsync target for --publish)
 PUBLISH_TARGET = "ec2-user@data.conductress.rainsupreme.net:/var/www/data"
 
+# Stable identity for this Conductress runner. runner.json is local deployment
+# configuration and is intentionally not committed.
+RUNNER_CONFIG_PATH = PROJECT_ROOT / "runner.json"
+
 
 class Features(Enum):
     PIN_VALKEY_THREADS = "pin_valkey_threads"

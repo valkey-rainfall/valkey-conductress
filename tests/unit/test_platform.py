@@ -61,3 +61,25 @@ def test_amd_detection(mock_machine):
 def test_x86_fallback_to_amd(mock_machine):
     with patch("builtins.open", side_effect=OSError):
         assert get_local_platform_tag() == "amd64"
+
+
+def test_local_platform_info_graviton3():
+    with patch("conductress.platform.get_local_platform_tag", return_value="arm64"):
+        from conductress.platform import get_local_platform_info
+
+        assert get_local_platform_info() == (
+            "arm64",
+            "arm64/c7g.metal/graviton3",
+            ["graviton3", "arm64"],
+        )
+
+
+def test_local_platform_info_intel():
+    with patch("conductress.platform.get_local_platform_tag", return_value="intel"):
+        from conductress.platform import get_local_platform_info
+
+        assert get_local_platform_info() == (
+            "intel",
+            "intel/xeon-8488c/sapphire-rapids",
+            ["intel"],
+        )

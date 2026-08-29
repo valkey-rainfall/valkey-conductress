@@ -9,32 +9,21 @@ from conductress.publisher import DashboardPublisher, detect_platform
 
 
 class TestDetectPlatform:
-    def test_aarch64(self):
-        with patch("conductress.publisher.platform.machine", return_value="aarch64"):
-            with patch("conductress.platform.aarch64_platform_id", return_value="arm64"):
-                pid, label = detect_platform()
-                assert pid == "arm64"
-                assert "graviton" in label
+    @pytest.mark.parametrize(
+        ("platform_info", "expected_id", "label_fragment"),
+        [
+            (("arm64", "arm64/c7g.metal/graviton3", ["graviton3", "arm64"]), "arm64", "graviton3"),
+            (("graviton4", "arm64/c8g.metal/graviton4", ["graviton4"]), "graviton4", "graviton4"),
+            (("amd64", "amd64/epyc-9r14/zen4", ["amd64", "amd"]), "amd64", "zen4"),
+            (("intel", "intel/xeon-8488c/sapphire-rapids", ["intel"]), "intel", "sapphire"),
+        ],
+    )
+    def test_shared_platform_detection(self, platform_info, expected_id, label_fragment):
+        with patch("conductress.platform.get_local_platform_info", return_value=platform_info):
+            platform_id, label = detect_platform()
 
-    def test_aarch64_graviton4(self):
-        with patch("conductress.publisher.platform.machine", return_value="aarch64"):
-            with patch("conductress.platform.aarch64_platform_id", return_value="graviton4"):
-                pid, label = detect_platform()
-                assert pid == "graviton4"
-                assert "graviton4" in label
-
-    def test_x86_64_amd(self):
-        with patch("conductress.publisher.platform.machine", return_value="x86_64"):
-            with patch("pathlib.Path.read_text", return_value="model name : AMD EPYC 9R14"):
-                pid, label = detect_platform()
-                assert pid == "amd64"
-
-    def test_x86_64_intel(self):
-        with patch("conductress.publisher.platform.machine", return_value="x86_64"):
-            with patch("pathlib.Path.read_text", return_value="model name : Intel(R) Xeon(R) Platinum 8488C"):
-                pid, label = detect_platform()
-                assert pid == "intel"
-                assert "sapphire" in label
+        assert platform_id == expected_id
+        assert label_fragment in label
 
 
 class TestDashboardPublisher:

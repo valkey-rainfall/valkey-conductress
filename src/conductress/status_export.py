@@ -8,6 +8,7 @@ aggregator on benchdev.
 import json
 import logging
 import shutil
+import tempfile
 import time
 from datetime import datetime
 from pathlib import Path
@@ -15,6 +16,7 @@ from typing import Any, Optional
 
 from .config import CONDUCTRESS_OUTPUT, CONDUCTRESS_TMP, PROJECT_ROOT
 from .file_protocol import FileProtocol
+from .runner_identity import get_runner_info
 from .status import _find_runner_pid, _format_elapsed
 from .task_queue import TaskQueue
 
@@ -32,8 +34,13 @@ DEFAULT_TASK_DURATION = 150  # 2.5 min (build + benchmark on AMD)
 
 def export_status(publish_target: str = "") -> Path:
     """Export current runner status to status.json. Returns the output path."""
+    identity = get_runner_info()
     status: dict[str, Any] = {
+        "schema_version": 1,
         "timestamp": datetime.utcnow().isoformat() + "Z",
+        "runner_id": identity["runner_id"],
+        "platform": identity["platform"]["label"],
+        "identity": identity,
         "host": _get_hostname(),
         "runner": _get_runner_info(),
         "current_task": _get_current_task(),
@@ -58,25 +65,39 @@ def export_status(publish_target: str = "") -> Path:
 
 
 def _publish_status(target: str) -> None:
-    """Rsync status.json to the dashboard data server."""
+    """Publish canonical runner status and its legacy platform alias."""
     from conductress.publisher import detect_platform
     from conductress.utility import run_rsync
 
     platform_id, _ = detect_platform()
-    # Map platform to status filename expected by dashboard
+    identity = get_runner_info()
+    # Preserve existing dashboard filenames while consumers migrate to the
+    # canonical runner-specific path.
     name_map = {"arm64": "arm", "amd64": "x86", "intel": "intel"}
-    filename = name_map.get(platform_id, platform_id)
+    legacy_filename = name_map.get(platform_id, platform_id)
 
     ssh_key = Path.home() / "conductress" / "server-keyfile.pem"
     if not ssh_key.exists():
         ssh_key = Path.home() / ".ssh" / "openssh-ec2-pair.pem"
     ssh_cmd = f"ssh -i {ssh_key} -F /dev/null -o StrictHostKeyChecking=no -o ConnectTimeout=10"
-    dest = f"{target}/status/{filename}.json"
-    run_rsync(
-        ["rsync", "-az", "--chmod=D755,F644", "-e", ssh_cmd, str(STATUS_EXPORT_FILE), dest],
-        dest,
-        timeout=15,
-    )
+
+    # Stage both destination paths and upload them in a single rsync process so
+    # Phase 1 adds metadata without adding another network connection.
+    with tempfile.TemporaryDirectory(prefix="conductress-status-") as tmp:
+        root = Path(tmp)
+        legacy = root / "status" / f"{legacy_filename}.json"
+        canonical = root / "status" / "runners" / f"{identity['runner_id']}.json"
+        legacy.parent.mkdir(parents=True, exist_ok=True)
+        canonical.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(STATUS_EXPORT_FILE, legacy)
+        shutil.copy2(STATUS_EXPORT_FILE, canonical)
+
+        destination = target.rstrip("/") + "/"
+        run_rsync(
+            ["rsync", "-az", "--chmod=D755,F644", "-e", ssh_cmd, f"{root}/", destination],
+            destination,
+            timeout=15,
+        )
 
 
 def _get_hostname() -> str:

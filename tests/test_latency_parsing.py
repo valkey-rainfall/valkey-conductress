@@ -544,3 +544,38 @@ class TestLatencyTaskDataExtensions:
         assert loaded.server_args == ""
         assert loaded.set_ratio == 0
         assert loaded.value_size == 16
+
+
+class TestLatencyResultProvenance:
+    def test_write_result_adds_shared_runner_provenance(self, tmp_path, monkeypatch):
+        runner = LatencyTaskRunner.__new__(LatencyTaskRunner)
+        runner.task_name = "latency-task"
+        runner.source = "valkey"
+        runner.specifier = "abcdef123456"
+        runner.target_rps = 100000
+        runner.set_ratio = 0
+        runner.value_size = 16
+        provenance = {
+            "provenance_schema_version": 1,
+            "runner_id": "armbench",
+            "platform": "arm64/c7g.metal/graviton3",
+            "environment": {"host_fingerprint": "fingerprint"},
+        }
+        monkeypatch.setattr("conductress.tasks.task_latency.CONDUCTRESS_RESULTS", tmp_path)
+        monkeypatch.setattr("conductress.tasks.task_latency.get_result_provenance", lambda: provenance)
+
+        runner._write_result(
+            {
+                "actual_rps": 99999,
+                "p50_us": 100,
+                "p99_us": 200,
+                "p99_9_us": 300,
+                "p100_us": 400,
+                "histogram": [],
+                "reps": 3,
+            }
+        )
+
+        entry = json.loads((tmp_path / "output.jsonl").read_text(encoding="utf-8"))
+        for key, value in provenance.items():
+            assert entry[key] == value

@@ -174,3 +174,29 @@ def get_local_platform_tag() -> str:
             pass
         return "amd64"  # fallback for x86
     return "unknown"
+
+
+_PLATFORM_LABELS = {
+    "arm64": "arm64/c7g.metal/graviton3",
+    "graviton4": "arm64/c8g.metal/graviton4",
+    "amd64": "amd64/epyc-9r14/zen4",
+    "intel": "intel/xeon-8488c/sapphire-rapids",
+    "unknown": "unknown",
+}
+
+_PLATFORM_ALIASES = {
+    "arm64": ["graviton3", "arm64"],
+    "graviton4": ["graviton4"],
+    "amd64": ["amd64", "amd"],
+    "intel": ["intel"],
+    "unknown": [],
+}
+
+
+def get_local_platform_info() -> tuple[str, str, list[str]]:
+    """Return canonical local platform ID, label, and routing aliases."""
+
+    platform_id = get_local_platform_tag()
+    label = _PLATFORM_LABELS.get(platform_id, platform_id)
+    aliases = list(_PLATFORM_ALIASES.get(platform_id, [platform_id]))
+    return platform_id, label, aliases

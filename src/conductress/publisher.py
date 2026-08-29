@@ -1,7 +1,6 @@
 """Dashboard publisher: exports and rsyncs data to the dashboard server after task completions."""
 
 import logging
-import platform
 import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -15,32 +14,12 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Platform detection: map uname machine + optional CPU model to dashboard platform ID
-_PLATFORM_MAP = {
-    "x86_64": ("amd64", "amd64/epyc-9r14/zen4"),
-}
-
-# Intel override: if CPU model contains these strings, use intel platform
-_INTEL_KEYWORDS = ("8488", "sapphire", "Xeon Platinum 8")
-
 
 def detect_platform() -> tuple[str, str]:
-    """Detect platform ID and label from hardware. Returns (id, label)."""
-    arch = platform.machine()
-    if arch == "x86_64":
-        try:
-            cpuinfo = Path("/proc/cpuinfo").read_text()
-            if any(kw in cpuinfo for kw in _INTEL_KEYWORDS):
-                return "intel", "intel/xeon-8488c/sapphire-rapids"
-        except OSError:
-            pass
-    if arch in ("aarch64", "arm64"):
-        from conductress.platform import aarch64_platform_id
+    """Detect platform ID and label. Kept as a compatibility wrapper."""
+    from conductress.platform import get_local_platform_info
 
-        if aarch64_platform_id() == "graviton4":
-            return "graviton4", "arm64/c8g.metal/graviton4"
-        return "arm64", "arm64/c7g.metal/graviton3"
-    platform_id, label = _PLATFORM_MAP.get(arch, (arch, arch))
+    platform_id, label, _aliases = get_local_platform_info()
     return platform_id, label
 
 

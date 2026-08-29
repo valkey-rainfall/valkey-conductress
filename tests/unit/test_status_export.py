@@ -12,6 +12,7 @@ from conductress.status_export import (
     _get_current_task,
     _get_queue_info,
     _get_recent_results,
+    _publish_status,
     export_status,
 )
 
@@ -160,6 +161,13 @@ class TestExportStatus:
             patch("conductress.status_export.STATUS_EXPORT_DIR", tmp_path),
             patch("conductress.status_export.STATUS_EXPORT_FILE", tmp_path / "status.json"),
             patch(
+                "conductress.status_export.get_runner_info",
+                return_value={
+                    "runner_id": "armbench",
+                    "platform": {"label": "arm64/c7g.metal/graviton3"},
+                },
+            ),
+            patch(
                 "conductress.status_export._get_runner_info",
                 return_value={"pid": None, "state": "stopped", "uptime_hours": None},
             ),
@@ -172,5 +180,38 @@ class TestExportStatus:
         assert path.exists()
         data = json.loads(path.read_text())
         assert "timestamp" in data
+        assert data["schema_version"] == 1
+        assert data["runner_id"] == "armbench"
+        assert data["platform"] == "arm64/c7g.metal/graviton3"
         assert data["runner"]["state"] == "stopped"
         assert data["eta_minutes"] == 0.0
+
+
+class TestPublishStatus:
+    def test_stages_runner_and_legacy_paths_in_one_rsync(self, tmp_path):
+        status_file = tmp_path / "status.json"
+        status_file.write_text('{"runner_id": "armbench"}', encoding="utf-8")
+        observed = {}
+
+        def capture_rsync(args, destination, timeout):
+            root = Path(args[-2])
+            observed["legacy"] = (root / "status" / "arm.json").read_text(encoding="utf-8")
+            observed["canonical"] = (root / "status" / "runners" / "armbench.json").read_text(encoding="utf-8")
+            observed["destination"] = destination
+            observed["timeout"] = timeout
+
+        with (
+            patch("conductress.status_export.STATUS_EXPORT_FILE", status_file),
+            patch("conductress.publisher.detect_platform", return_value=("arm64", "arm64/c7g.metal/graviton3")),
+            patch("conductress.status_export.get_runner_info", return_value={"runner_id": "armbench"}),
+            patch("conductress.utility.run_rsync", side_effect=capture_rsync) as mock_rsync,
+        ):
+            _publish_status("user@data:/var/www/data")
+
+        mock_rsync.assert_called_once()
+        assert observed == {
+            "legacy": '{"runner_id": "armbench"}',
+            "canonical": '{"runner_id": "armbench"}',
+            "destination": "user@data:/var/www/data/",
+            "timeout": 15,
+        }
