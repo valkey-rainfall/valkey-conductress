@@ -4,6 +4,10 @@ A benchmarking framework for [Valkey](https://github.com/valkey-io/valkey) that 
 
 Conductress assumes a separate machine (or machines) to run `valkey-server`, distinct from the machine conducting the tests and generating load (always localhost). Localhost is also supported as a server target.
 
+## Design and implementation plans
+
+- [Fleet control plane and daily drift canary](docs/fleet-control-plane-implementation-plan.md) — pull-based remote inboxes, boundary-only network activity, fleet discovery, and canary rollout. Multiple same-platform runners are deferred.
+
 ## Quick Start
 
 1. Install Git and Python 3.9+
