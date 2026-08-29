@@ -47,6 +47,18 @@ def main() -> None:
         default="completed,failed,empty",
         help="Comma-separated event types that trigger a nudge: completed, failed, empty (default: all). Unrecognized event names are silently ignored.",
     )
+    run_parser.add_argument(
+        "--fleet-mode",
+        choices=["off", "shadow", "live"],
+        default="off",
+        help="Fleet mailbox mode: off, shadow status-only, or live task import",
+    )
+    run_parser.add_argument(
+        "--management-settle",
+        type=float,
+        default=None,
+        help="Seconds to settle after boundary network activity before task execution",
+    )
     subparsers.add_parser("setup", help="Run setup/bootstrap")
     subparsers.add_parser("queue", help="Manage the task queue (list, add, remove)", add_help=False)
     subparsers.add_parser("fleet", help="Discover and inspect benchmark runners", add_help=False)
@@ -100,6 +112,8 @@ def main() -> None:
     sweep_sub.add_parser("list", help="List all workload IDs and current scheduling config")
 
     args, remaining = parser.parse_known_args()
+    if args.command == "run" and args.management_settle is not None and args.management_settle < 0:
+        parser.error("--management-settle must not be negative")
 
     # Configure logging for all subcommands
     logging.basicConfig(
@@ -146,6 +160,8 @@ def main() -> None:
             publish_target=args.publish,
             nudge_url=args.nudge_url,
             nudge_on=nudge_events,
+            fleet_mode=args.fleet_mode,
+            management_settle_seconds=args.management_settle,
         )
         if args.sweep:
             print("Sweep mode enabled — will auto-generate tasks when queue is empty")

@@ -13,10 +13,21 @@ from typing import Optional, Protocol
 from conductress.sweep_config import load_sweep_config
 from conductress.task_queue import BaseTaskRunner
 
-from .config import CONDUCTRESS_FAILED_DIR, CONDUCTRESS_FAILED_LOG, CONDUCTRESS_LOG, QUEUE_POLL_INTERVAL, get_servers
+from .config import (
+    CONDUCTRESS_FAILED_DIR,
+    CONDUCTRESS_FAILED_LOG,
+    CONDUCTRESS_LOG,
+    DELIVERY_JOURNAL_PATH,
+    FLEET_IDLE_POLL_INTERVAL,
+    MANAGEMENT_SETTLE_SECONDS,
+    QUEUE_POLL_INTERVAL,
+    get_servers,
+)
 from .file_protocol import FileProtocol
 from .nudge_hook import NudgeHook
+from .runner_mailbox import RunnerMailbox
 from .server import Server
+from .status_export import build_status, export_status
 from .task_queue import BaseTaskData, TaskQueue
 
 logger = logging.getLogger(__name__)
@@ -41,9 +52,21 @@ class TaskRunner:
         publish_target: Optional[str] = None,
         nudge_url: Optional[str] = None,
         nudge_on: Optional[set[str]] = None,
+        fleet_mode: str = "off",
+        management_settle_seconds: Optional[float] = None,
+        mailbox: Optional[RunnerMailbox] = None,
     ) -> None:
         self.task: Optional[BaseTaskData] = None
         self._subscribers: list[TaskSubscriber] = []
+        self._publish_target = publish_target
+        self._mailbox = mailbox
+        if self._mailbox is None and fleet_mode != "off":
+            self._mailbox = RunnerMailbox(DELIVERY_JOURNAL_PATH, mode=fleet_mode)
+        self._management_settle_seconds = (
+            MANAGEMENT_SETTLE_SECONDS if management_settle_seconds is None else management_settle_seconds
+        )
+        if self._management_settle_seconds < 0:
+            raise ValueError("management_settle_seconds must not be negative")
         if sweep:
             from conductress.config import SWEEP_IO_THREADS, SWEEP_PIPELINING, SWEEP_THROUGHPUT_WORKLOADS
             from conductress.platform import get_local_platform_tag
@@ -157,52 +180,103 @@ class TaskRunner:
                 logger.warning("Failed to release CPU allocations: %s", cleanup_err)
             raise
 
+    def _publish_boundary(self, state: str, task: Optional[BaseTaskData]) -> None:
+        if self._mailbox is None and not self._publish_target:
+            return
+        boundary = {
+            "state": state,
+            "task_id": task.task_id if task else None,
+            "task_type": task.task_type if task else None,
+            "timestamp": datetime.utcnow().isoformat() + "Z",
+        }
+        fleet_control = self._mailbox.status() if self._mailbox else None
+        status = build_status(fleet_control=fleet_control, boundary=boundary)
+        if self._mailbox:
+            self._mailbox.push_status(status)
+            status = build_status(fleet_control=self._mailbox.status(), boundary=boundary)
+        export_status(publish_target=self._publish_target or "", status=status)
+
+    def _choose_next(self, queue: TaskQueue) -> Optional[BaseTaskData]:
+        if self._mailbox and self._mailbox.journal.active is not None:
+            remote = self._mailbox.poll(queue)
+            if remote is not None:
+                return remote
+            if self._mailbox.blocks_execution():
+                return None
+
+        local = queue.get_next_task()
+        if local is not None:
+            return local
+
+        if self._mailbox:
+            remote = self._mailbox.poll(queue)
+            if remote is not None:
+                return remote
+            if self._mailbox.blocks_execution():
+                return None
+
+        self._schedule_next()
+        return queue.get_next_task()
+
+    def _settle_management(self) -> None:
+        if (self._mailbox is not None or self._publish_target) and self._management_settle_seconds:
+            time.sleep(self._management_settle_seconds)
+
     async def run(self):
-        """Main function - execute tasks from the queue."""
+        """Execute local and remote tasks with management only at boundaries."""
         cleaned_count = FileProtocol.cleanup_orphaned_tasks()
         if cleaned_count > 0:
-            logger.info(f"Cleaned up {cleaned_count} orphaned benchmark directories on startup")
-            logger.info(f"Cleaned up {cleaned_count} orphaned benchmark directories on startup")
+            logger.info("Cleaned up %d orphaned benchmark directories on startup", cleaned_count)
 
         await asyncio.gather(*[Server(server.ip).kill_all_valkey_instances_on_host() for server in get_servers()])
 
-        # Notify subscribers on startup if queue is empty (e.g. sweep queues its first task)
         queue = TaskQueue()
-        self.task = queue.get_next_task()
-        if not self.task:
-            self._schedule_next()
+        self.task = self._choose_next(queue)
         while True:
-            while self.task:
-                try:
-                    await self.__run_task(self.task)
-                except Exception as exc:
-                    self._record_failure(self.task, exc)
-                    for sub in self._subscribers:
-                        sub.on_task_failed(self.task)
-                    queue.finish_task(self.task)
-                    self._schedule_next()
-                    self.task = queue.get_next_task()
-                    continue
-
-                for sub in self._subscribers:
-                    sub.on_task_completed(self.task)
-                queue.finish_task(self.task)
-                self._schedule_next()
-                self.task = queue.get_next_task()
-
-            # Queue empty — schedule next (may queue new work)
-            self._schedule_next()
-            self.task = queue.get_next_task()
-            if self.task:
+            if self.task is None:
+                self._publish_boundary("idle", None)
+                logger.debug("waiting for new jobs in queue")
+                next_fleet_poll = time.monotonic() + FLEET_IDLE_POLL_INTERVAL
+                while self.task is None:
+                    time.sleep(QUEUE_POLL_INTERVAL)
+                    if self._mailbox and self._mailbox.journal.active is not None:
+                        self.task = self._choose_next(queue)
+                        continue
+                    local = queue.get_next_task()
+                    if local is not None:
+                        self.task = local
+                        continue
+                    if self._mailbox is None or time.monotonic() >= next_fleet_poll:
+                        self.task = self._choose_next(queue)
+                        next_fleet_poll = time.monotonic() + FLEET_IDLE_POLL_INTERVAL
                 continue
 
-            logger.debug("waiting for new jobs in queue")
-            while not self.task:
-                time.sleep(QUEUE_POLL_INTERVAL)
-                self.task = queue.get_next_task()
-                if not self.task:
-                    self._schedule_next()
-                    self.task = queue.get_next_task()
+            task = self.task
+            self._publish_boundary("starting", task)
+            self._settle_management()
+            try:
+                await self.__run_task(task)
+            except Exception as exc:
+                self._record_failure(task, exc)
+                for sub in self._subscribers:
+                    sub.on_task_failed(task)
+                if self._mailbox and self._mailbox.owns(task.task_id):
+                    self._mailbox.stage_failure(task, f"{type(exc).__name__}: {exc}")
+                queue.finish_task(task)
+                if self._mailbox and self._mailbox.owns(task.task_id):
+                    self._mailbox.flush_pending_outcome()
+                self._publish_boundary("failed", task)
+            else:
+                for sub in self._subscribers:
+                    sub.on_task_completed(task)
+                if self._mailbox and self._mailbox.owns(task.task_id):
+                    self._mailbox.stage_success(task)
+                queue.finish_task(task)
+                if self._mailbox and self._mailbox.owns(task.task_id):
+                    self._mailbox.flush_pending_outcome()
+                self._publish_boundary("completed", task)
+
+            self.task = self._choose_next(queue)
 
     def _schedule_next(self) -> None:
         """Pick the highest-priority coordinator and let it queue a task.

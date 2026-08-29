@@ -7,6 +7,7 @@ aggregator on benchdev.
 
 import json
 import logging
+import os
 import shutil
 import tempfile
 import time
@@ -32,8 +33,12 @@ RECENT_RESULTS_COUNT = 5
 DEFAULT_TASK_DURATION = 150  # 2.5 min (build + benchmark on AMD)
 
 
-def export_status(publish_target: str = "") -> Path:
-    """Export current runner status to status.json. Returns the output path."""
+def build_status(
+    *,
+    fleet_control: Optional[dict[str, Any]] = None,
+    boundary: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    """Build a local status snapshot without performing network activity."""
     identity = get_runner_info()
     status: dict[str, Any] = {
         "schema_version": 1,
@@ -49,12 +54,30 @@ def export_status(publish_target: str = "") -> Path:
         "disk": _get_disk_info(),
     }
 
-    # Estimate time to complete queue
     avg_duration = _estimate_task_duration()
     queue_depth = status["queue"]["depth"]
     current_remaining = _estimate_current_remaining(status["current_task"])
     status["eta_minutes"] = round((current_remaining + queue_depth * avg_duration) / 60, 1)
+    if fleet_control is not None:
+        status["fleet_control"] = fleet_control
+    if boundary is not None:
+        status["boundary"] = boundary
+        status["measurement_isolation"] = {
+            "boundary_publisher_active": True,
+            "status_timer_migration_required": os.environ.get("CONDUCTRESS_BOUNDARY_STATUS_ONLY") != "1",
+        }
+    return status
 
+
+def export_status(
+    publish_target: str = "",
+    *,
+    status: Optional[dict[str, Any]] = None,
+    fleet_control: Optional[dict[str, Any]] = None,
+    boundary: Optional[dict[str, Any]] = None,
+) -> Path:
+    """Write and optionally publish a status snapshot."""
+    status = status or build_status(fleet_control=fleet_control, boundary=boundary)
     STATUS_EXPORT_DIR.mkdir(parents=True, exist_ok=True)
     STATUS_EXPORT_FILE.write_text(json.dumps(status, indent=2))
 
