@@ -24,6 +24,9 @@
     },
     "recent_results": {"type": "array"},
     "disk": {"type": "object"},
+    "fleet_control": {"type": "object"},
+    "boundary": {"type": "object"},
+    "measurement_isolation": {"type": "object"},
     "eta_minutes": {"type": "number", "minimum": 0}
   }
 }

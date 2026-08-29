@@ -46,6 +46,30 @@ def _api_exit_code(status: int, code: str) -> int:
     return 1
 
 
+def _load_token(
+    env_name: str,
+    file_env_name: str,
+    default_file: Path,
+    label: str,
+    missing_code: str,
+) -> str:
+    token = os.environ.get(env_name)
+    token_file_value = os.environ.get(file_env_name)
+    token_file = Path(token_file_value).expanduser() if token_file_value else default_file
+    if not token and token_file.exists():
+        mode = stat.S_IMODE(token_file.stat().st_mode)
+        if mode & 0o077:
+            raise FleetClientError(
+                "TOKEN_FILE_PERMISSIONS",
+                f"{label} token file must not be group/world accessible: {token_file}",
+                2,
+            )
+        token = token_file.read_text(encoding="utf-8").strip()
+    if not token:
+        raise FleetClientError(missing_code, f"set {env_name} or {file_env_name}", 2)
+    return token
+
+
 @dataclass(frozen=True)
 class FleetClientConfig:
     base_url: str
@@ -55,29 +79,29 @@ class FleetClientConfig:
 
     @classmethod
     def from_env(cls) -> "FleetClientConfig":
-        base_url = os.environ.get("CONDUCTRESS_CONTROL_URL", DEFAULT_CONTROL_URL).rstrip("/")
-        token = os.environ.get("CONDUCTRESS_OPERATOR_TOKEN")
-        token_file_value = os.environ.get("CONDUCTRESS_OPERATOR_TOKEN_FILE")
-        token_file = (
-            Path(token_file_value).expanduser()
-            if token_file_value
-            else Path.home() / ".config" / "conductress" / "operator.token"
+        token = _load_token(
+            "CONDUCTRESS_OPERATOR_TOKEN",
+            "CONDUCTRESS_OPERATOR_TOKEN_FILE",
+            Path.home() / ".config" / "conductress" / "operator.token",
+            "operator",
+            "OPERATOR_TOKEN_MISSING",
         )
-        if not token and token_file.exists():
-            mode = stat.S_IMODE(token_file.stat().st_mode)
-            if mode & 0o077:
-                raise FleetClientError(
-                    "TOKEN_FILE_PERMISSIONS",
-                    f"operator token file must not be group/world accessible: {token_file}",
-                    2,
-                )
-            token = token_file.read_text(encoding="utf-8").strip()
-        if not token:
-            raise FleetClientError(
-                "OPERATOR_TOKEN_MISSING",
-                "set CONDUCTRESS_OPERATOR_TOKEN or CONDUCTRESS_OPERATOR_TOKEN_FILE",
-                2,
-            )
+        return cls._from_token(token)
+
+    @classmethod
+    def from_runner_env(cls) -> "FleetClientConfig":
+        token = _load_token(
+            "CONDUCTRESS_RUNNER_TOKEN",
+            "CONDUCTRESS_RUNNER_TOKEN_FILE",
+            Path.home() / ".config" / "conductress" / "runner.token",
+            "runner",
+            "RUNNER_TOKEN_MISSING",
+        )
+        return cls._from_token(token)
+
+    @classmethod
+    def _from_token(cls, token: str) -> "FleetClientConfig":
+        base_url = os.environ.get("CONDUCTRESS_CONTROL_URL", DEFAULT_CONTROL_URL).rstrip("/")
         if not base_url.startswith("https://") and not (
             base_url.startswith("http://127.0.0.1") or base_url.startswith("http://localhost")
         ):
@@ -96,12 +120,7 @@ class FleetClientConfig:
         ca_bundle = Path(ca_value).expanduser() if ca_value else None
         if ca_bundle is not None and not ca_bundle.is_file():
             raise FleetClientError("CA_BUNDLE_NOT_FOUND", f"control CA bundle does not exist: {ca_bundle}", 1)
-        return cls(
-            base_url=base_url,
-            token=token,
-            timeout_seconds=timeout,
-            ca_bundle=ca_bundle,
-        )
+        return cls(base_url=base_url, token=token, timeout_seconds=timeout, ca_bundle=ca_bundle)
 
 
 class FleetClient:
@@ -120,6 +139,10 @@ class FleetClient:
     @classmethod
     def from_env(cls) -> "FleetClient":
         return cls(FleetClientConfig.from_env())
+
+    @classmethod
+    def from_runner_env(cls) -> "FleetClient":
+        return cls(FleetClientConfig.from_runner_env())
 
     def _request(
         self,
@@ -145,7 +168,7 @@ class FleetClient:
             payload = json.dumps(body, separators=(",", ":")).encode("utf-8")
             request_headers["Content-Type"] = "application/json"
         request = Request(url, data=payload, headers=request_headers, method=method)
-        retryable = method in {"GET", "HEAD"} or (method == "POST" and "Idempotency-Key" in request_headers)
+        retryable = method in {"GET", "HEAD"} or (method in {"POST", "PUT"} and "Idempotency-Key" in request_headers)
         attempts = 3 if retryable else 1
 
         for attempt in range(attempts):
@@ -224,6 +247,50 @@ class FleetClient:
                 "tasks",
                 body=envelope,
                 headers={"Idempotency-Key": idempotency_key},
+            )
+            or {}
+        )
+
+    def claim_task(self, runner_id: str) -> Optional[dict[str, Any]]:
+        return self._request(
+            "POST",
+            f"runners/{runner_id}/claim",
+            headers={"Idempotency-Key": f"claim:{runner_id}"},
+        )
+
+    def accept_task(self, task_id: str, claim_token: str) -> dict[str, Any]:
+        return (
+            self._request(
+                "POST",
+                f"tasks/{task_id}/accept",
+                body={"claim_token": claim_token},
+                headers={"Idempotency-Key": f"accept:{task_id}"},
+            )
+            or {}
+        )
+
+    def report_outcome(self, task_id: str, outcome: dict[str, Any]) -> dict[str, Any]:
+        state = outcome.get("state")
+        if state not in {"completed", "failed"}:
+            raise FleetClientError("OUTCOME_STATE_INVALID", "outcome state must be completed or failed", 1)
+        endpoint = "complete" if state == "completed" else "fail"
+        return (
+            self._request(
+                "POST",
+                f"tasks/{task_id}/{endpoint}",
+                body=outcome,
+                headers={"Idempotency-Key": f"outcome:{task_id}:{state}"},
+            )
+            or {}
+        )
+
+    def push_status(self, runner_id: str, status: dict[str, Any]) -> dict[str, Any]:
+        return (
+            self._request(
+                "PUT",
+                f"runners/{runner_id}/status",
+                body=status,
+                headers={"Idempotency-Key": f"status:{runner_id}:{status.get('timestamp', '')}"},
             )
             or {}
         )

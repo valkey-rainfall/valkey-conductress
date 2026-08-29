@@ -73,8 +73,14 @@ TUI_REFRESH_INTERVAL = 15
 # RUNTIME CONSTANTS
 # =============================================================================
 
-# Task runner polls the queue at this interval when idle (seconds)
+# Task runner polls the local queue at this interval when idle (seconds)
 QUEUE_POLL_INTERVAL = 4
+
+# Fleet mailbox management happens only between tasks. The runner sleeps after
+# the final boundary contact before starting benchmark work.
+FLEET_IDLE_POLL_INTERVAL = 30
+MANAGEMENT_SETTLE_SECONDS = 2.0
+DELIVERY_JOURNAL_PATH = PROJECT_ROOT / "fleet_delivery.json"
 
 # How often sweep fetches new commits from origin (seconds).
 # Runs between jobs, not during benchmarks.

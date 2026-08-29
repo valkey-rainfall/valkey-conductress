@@ -2,6 +2,8 @@
 
 import json
 import logging
+import os
+import tempfile
 from abc import ABC, abstractmethod
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
@@ -83,6 +85,23 @@ class BaseTaskData(ABC):
             json.dump(data, f, indent=2)
 
     @classmethod
+    def from_dict(cls, document: dict) -> "BaseTaskData":
+        """Deserialize a task from an in-memory task document."""
+        if not isinstance(document, dict):
+            raise ValueError("Invalid task data: expected object")
+        data = dict(document)
+        try:
+            timestamp = datetime.fromisoformat(data.pop("timestamp"))
+            task_type = data.pop("task_type")
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError(f"Invalid task data: {exc}") from exc
+        if task_type not in BaseTaskData.__task_registry:
+            raise ValueError(f"Unknown task type: {task_type}")
+        result = BaseTaskData.__task_registry[task_type](**data)
+        result.timestamp = timestamp
+        return result
+
+    @classmethod
     def from_file(cls, filepath: Path) -> "BaseTaskData":
         """Load a task from a JSON file"""
         try:
@@ -95,13 +114,7 @@ class BaseTaskData(ABC):
         if not isinstance(data, dict):
             raise ValueError(f"Invalid task data in file: {filepath}")
 
-        timestamp = datetime.fromisoformat(data.pop("timestamp"))
-        task_type = data.pop("task_type")
-        if task_type not in BaseTaskData.__task_registry:
-            raise ValueError(f"Unknown task type: {task_type}")
-        result = BaseTaskData.__task_registry[task_type](**data)
-        result.timestamp = timestamp
-        return result
+        return cls.from_dict(data)
 
 
 class BaseTaskRunner(ABC):
@@ -126,8 +139,50 @@ class TaskQueue:
 
     def submit_task(self, task: BaseTaskData) -> None:
         """Add a new task to the queue"""
-        task_file = self.queue_dir / f"task_{task.task_id}.json"
+        task_file = self.task_path(task.task_id)
         task.save_to_file(task_file)
+
+    def task_path(self, task_id: str) -> Path:
+        return self.queue_dir / f"task_{task_id}.json"
+
+    def has_task(self, task_id: str) -> bool:
+        return self.task_path(task_id).exists()
+
+    def import_task(self, document: dict) -> BaseTaskData:
+        """Validate and atomically install a serialized task document."""
+        task = BaseTaskData.from_dict(document)
+        task_file = self.queue_dir / f"task_{task.task_id}.json"
+        serialized = json.dumps(document, indent=2)
+        if task_file.exists():
+            existing = json.loads(task_file.read_text(encoding="utf-8"))
+            if existing != document:
+                raise ValueError(f"task file already exists with different content: {task.task_id}")
+            return task
+
+        temporary_path = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                dir=self.queue_dir,
+                prefix=f".task_{task.task_id}.",
+                suffix=".tmp",
+                delete=False,
+            ) as temporary:
+                temporary.write(serialized)
+                temporary.flush()
+                os.fsync(temporary.fileno())
+                temporary_path = Path(temporary.name)
+            os.replace(temporary_path, task_file)
+            directory_fd = os.open(self.queue_dir, os.O_RDONLY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+        finally:
+            if temporary_path is not None:
+                temporary_path.unlink(missing_ok=True)
+        return task
 
     def get_next_task(self) -> Optional[BaseTaskData]:
         """Get the next task from the queue"""

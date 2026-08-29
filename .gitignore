@@ -3,6 +3,7 @@
 servers.json
 runner.json
 valkey-benchmark
+fleet_delivery.json
 valkey-cli
 log.txt
 output.txt
