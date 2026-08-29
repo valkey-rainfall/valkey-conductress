@@ -49,6 +49,8 @@ def main() -> None:
     )
     subparsers.add_parser("setup", help="Run setup/bootstrap")
     subparsers.add_parser("queue", help="Manage the task queue (list, add, remove)", add_help=False)
+    subparsers.add_parser("fleet", help="Discover and inspect benchmark runners", add_help=False)
+    subparsers.add_parser("remote", help="Inspect and cancel remote tasks", add_help=False)
     subparsers.add_parser("compare", help="Run analysis/comparison")
     runner_info_parser = subparsers.add_parser("runner-info", help="Show stable runner identity and environment")
     runner_info_parser.add_argument("--json", action="store_true", help="Emit versioned machine-readable JSON")
@@ -200,6 +202,11 @@ def main() -> None:
         from conductress.cli import main as cli_main
 
         sys.exit(cli_main(["queue"] + remaining))
+
+    elif args.command in {"fleet", "remote"}:
+        from conductress.fleet_cli import main as fleet_cli_main
+
+        sys.exit(fleet_cli_main([args.command] + remaining))
 
     elif args.command == "compare":
         from conductress.analysis import main as analysis_main
