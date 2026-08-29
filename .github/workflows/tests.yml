@@ -50,9 +50,9 @@ jobs:
         with:
           python-version: '3.12'
       - name: Install package and dependencies
-        run: pip install -e '.[dev]'
+        run: pip install -e '.[dev,control]'
       - name: Run unit tests
-        run: pytest tests/unit --cov=conductress --cov-report=term-missing --cov-report=xml --cov-fail-under=58
+        run: pytest tests/unit tests/control --cov=conductress --cov-report=term-missing --cov-report=xml --cov-fail-under=58
       - name: Run integration tests
         run: pytest tests/integration -m "not requires_server"
       - name: Type checking
