@@ -2,13 +2,15 @@
 
 import argparse
 import itertools
+import json
 import logging
 import sys
 from dataclasses import replace
-from typing import TYPE_CHECKING, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, List, Optional, Tuple
 
 from . import config
-from .task_queue import TaskQueue
+from .fleet_client import FleetClientError
+from .task_queue import BaseTaskData, TaskQueue
 from .tasks.task_perf_benchmark import PerfTaskData
 from .utility import HumanByte, HumanTime, validate_cpulist
 
@@ -181,6 +183,86 @@ def _add_perf_args(parser: argparse.ArgumentParser) -> None:
         default="",
         help="Extra raw server arguments appended to the valkey-server command line (e.g. '--io-threads-ownership yes'). Appended last, overriding generated defaults",
     )
+
+
+def _add_remote_routing_args(parser: argparse.ArgumentParser) -> None:
+    routing = parser.add_mutually_exclusive_group()
+    routing.add_argument("--runner", help="Submit to a specific fleet runner instead of the local queue")
+    routing.add_argument("--platform", help="Submit to the unique enabled runner matching this platform")
+    parser.add_argument("--priority", type=int, default=100, help="Remote queue priority (default: 100)")
+    parser.add_argument("--json", action="store_true", help="Emit machine-readable submission output")
+
+
+def _submit_tasks(tasks: List[BaseTaskData], args: argparse.Namespace) -> dict:
+    runner_arg = getattr(args, "runner", None)
+    platform_arg = getattr(args, "platform", None)
+    if not runner_arg and not platform_arg:
+        queue = TaskQueue()
+        for task in tasks:
+            queue.submit_task(task)
+        return {
+            "destination": "local",
+            "runner_id": None,
+            "tasks": [{"task_id": task.task_id, "created": True, "state": "queued"} for task in tasks],
+        }
+
+    from .fleet_cli import resolve_runner
+    from .fleet_client import FleetClient
+    from .task_envelope import build_task_envelope
+
+    client = FleetClient.from_env()
+    runner_id = resolve_runner(client, runner_id=runner_arg, platform=platform_arg)
+    submitted: list[dict[str, Any]] = []
+    for task in tasks:
+        envelope = build_task_envelope(task, runner_id=runner_id, priority=args.priority)
+        try:
+            document = client.submit_task(envelope, idempotency_key=f"{runner_id}:{task.task_id}")
+        except FleetClientError as exc:
+            if not submitted:
+                raise
+            submitted_ids = [item["task_id"] for item in submitted]
+            details = {"runner_id": runner_id, "submitted": submitted}
+            raise FleetClientError(
+                exc.code,
+                f"{exc.message}; {len(submitted)} task(s) were already submitted: " f"{', '.join(submitted_ids)}",
+                exc.exit_code,
+                exc.status,
+                details,
+            ) from exc
+        remote_task = document["task"]
+        submitted.append(
+            {
+                "task_id": remote_task["task_id"],
+                "created": document["created"],
+                "state": remote_task["state"],
+            }
+        )
+    return {"destination": "remote", "runner_id": runner_id, "tasks": submitted}
+
+
+def _finish_submission(result: dict, args: argparse.Namespace) -> bool:
+    """Print generic JSON or remote destination details; return True if done."""
+    if getattr(args, "json", False):
+        print(json.dumps({"schema_version": 1, "command": "queue.submit", "data": result}, indent=2, sort_keys=True))
+        return True
+    if result["destination"] == "remote":
+        created = sum(1 for task in result["tasks"] if task["created"])
+        replayed = len(result["tasks"]) - created
+        suffix = f" ({replayed} idempotent replay)" if replayed else ""
+        print(f"Remote destination: {result['runner_id']} — {created} task(s) submitted{suffix}")
+    return False
+
+
+class _TaskSubmitter:
+    def __init__(self, args: argparse.Namespace):
+        self.args = args
+        self.tasks: List[BaseTaskData] = []
+
+    def submit_task(self, task: BaseTaskData) -> None:
+        self.tasks.append(task)
+
+    def finish(self) -> dict:
+        return _submit_tasks(self.tasks, self.args)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -520,6 +602,16 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"Build arguments. Default: '{config.DEFAULT_MAKE_ARGS}'",
     )
 
+    for task_parser in (
+        add_parser,
+        mem_parser,
+        mixed_parser,
+        scenario_parser,
+        lat_parser,
+        cc_parser,
+    ):
+        _add_remote_routing_args(task_parser)
+
     # queue remove
     remove_parser = queue_sub.add_parser("remove", help="Remove a task from the queue")
     remove_parser.add_argument("task_id", help="Task ID to remove (from 'queue list' output)")
@@ -600,7 +692,7 @@ def handle_queue_add(args: argparse.Namespace) -> int:
 
     combinations = generate_task_combinations(tests, sizes, io_threads, pipelining, key_sizes)
 
-    queue = TaskQueue()
+    queue = _TaskSubmitter(args)
     for test, size, io_thread, pipeline, key_size in combinations:
         task = PerfTaskData(
             source=args.source,
@@ -630,6 +722,9 @@ def handle_queue_add(args: argparse.Namespace) -> int:
         )
         queue.submit_task(task)
 
+    submission = queue.finish()
+    if _finish_submission(submission, args):
+        return 0
     print(f"Queued {len(combinations)} task(s):")
     print(f"  source={args.source} specifier={args.specifier}")
     print(f"  tests={tests} sizes={sizes} io-threads={io_threads} pipeline={pipelining}")
@@ -684,9 +779,11 @@ def handle_queue_add_latency(args: argparse.Namespace) -> int:
         value_size=args.value_size,
     )
 
-    queue = TaskQueue()
+    queue = _TaskSubmitter(args)
     queue.submit_task(task)
-    desc = task.short_description()
+    submission = queue.finish()
+    if _finish_submission(submission, args):
+        return 0
     print(f"Queued latency task: {args.specifier[:8]} @ {args.target_rps} rps (id: {task.task_id})")
     if args.server_args:
         print(f"  server-args: {args.server_args}")
@@ -759,7 +856,7 @@ def handle_queue_add_mixed(args: argparse.Namespace) -> int:
 
     combinations = list(itertools.product(sizes, io_threads, pipelining, key_sizes))
 
-    queue = TaskQueue()
+    queue = _TaskSubmitter(args)
     for val_size, io_thread, pipeline, key_size in combinations:
         task = MixedTaskData(
             source=args.source,
@@ -782,6 +879,9 @@ def handle_queue_add_mixed(args: argparse.Namespace) -> int:
         )
         queue.submit_task(task)
 
+    submission = queue.finish()
+    if _finish_submission(submission, args):
+        return 0
     ratio_str = f"{args.set_ratio}%SET/{100-args.set_ratio}%GET"
     print(f"Queued {len(combinations)} mixed task(s) ({ratio_str}):")
     print(f"  source={args.source} specifier={args.specifier}")
@@ -854,7 +954,7 @@ def handle_queue_add_scenario(args: argparse.Namespace) -> int:
         )
         return 1
 
-    queue = TaskQueue()
+    queue = _TaskSubmitter(args)
     task = ScenarioTaskData(
         source=args.source,
         specifier=args.specifier,
@@ -876,6 +976,9 @@ def handle_queue_add_scenario(args: argparse.Namespace) -> int:
         overlay_value_size=args.overlay_value_size,
     )
     queue.submit_task(task)
+    submission = queue.finish()
+    if _finish_submission(submission, args):
+        return 0
 
     print(f"Queued scenario task: {args.scenario}")
     print(f"  source={args.source} specifier={args.specifier}")
@@ -942,7 +1045,7 @@ def handle_queue_add_cachecannon(args: argparse.Namespace) -> int:
         print(f"Error (--client-cpus): {e}", file=sys.stderr)
         return 1
 
-    queue = TaskQueue()
+    queue = _TaskSubmitter(args)
     task = CachecannonTaskData(
         source=args.source,
         specifier=args.specifier,
@@ -968,6 +1071,9 @@ def handle_queue_add_cachecannon(args: argparse.Namespace) -> int:
         distribution=args.distribution,
     )
     queue.submit_task(task)
+    submission = queue.finish()
+    if _finish_submission(submission, args):
+        return 0
 
     print(f"Queued cachecannon task (NOT sweep-comparable):")
     print(f"  source={args.source} specifier={args.specifier}")
@@ -1053,7 +1159,7 @@ def handle_queue_add_memory(args: argparse.Namespace) -> int:
                     )
                 )
 
-    queue = TaskQueue()
+    queue = _TaskSubmitter(args)
     for wl in workloads:
         task = MemTaskData(
             source=args.source,
@@ -1074,6 +1180,9 @@ def handle_queue_add_memory(args: argparse.Namespace) -> int:
         )
         queue.submit_task(task)
 
+    submission = queue.finish()
+    if _finish_submission(submission, args):
+        return 0
     print(f"Queued {len(workloads)} memory task(s):")
     print(f"  source={args.source} specifier={args.specifier}")
     for wl in workloads:
@@ -1128,6 +1237,35 @@ def handle_queue_clear(args: argparse.Namespace) -> int:
     return 0
 
 
+def _dispatch(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
+    if args.command == "queue":
+        if args.queue_command is None:
+            # Bare 'conductress queue' defaults to list (preserves original
+            # behavior relied on by scripts/integration tests). The improved
+            # subcommand help remains available via 'conductress queue --help'.
+            return handle_queue_list(args)
+        if args.queue_command == "list":
+            return handle_queue_list(args)
+        if args.queue_command == "add":
+            return handle_queue_add(args)
+        if args.queue_command == "add-memory":
+            return handle_queue_add_memory(args)
+        if args.queue_command == "add-mixed":
+            return handle_queue_add_mixed(args)
+        if args.queue_command == "add-scenario":
+            return handle_queue_add_scenario(args)
+        if args.queue_command == "add-latency":
+            return handle_queue_add_latency(args)
+        if args.queue_command == "add-cachecannon":
+            return handle_queue_add_cachecannon(args)
+        if args.queue_command == "remove":
+            return handle_queue_remove(args)
+        if args.queue_command == "clear":
+            return handle_queue_clear(args)
+    parser.print_usage()
+    return 1
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     """Entry point for the CLI module."""
     parser = build_parser()
@@ -1137,33 +1275,23 @@ def main(argv: Optional[List[str]] = None) -> int:
         parser.print_usage()
         return 1
 
-    if args.command == "queue":
-        if args.queue_command is None:
-            # Bare 'conductress queue' defaults to list (preserves original
-            # behavior relied on by scripts/integration tests). The improved
-            # subcommand help remains available via 'conductress queue --help'.
-            return handle_queue_list(args)
-        elif args.queue_command == "list":
-            return handle_queue_list(args)
-        elif args.queue_command == "add":
-            return handle_queue_add(args)
-        elif args.queue_command == "add-memory":
-            return handle_queue_add_memory(args)
-        elif args.queue_command == "add-mixed":
-            return handle_queue_add_mixed(args)
-        elif args.queue_command == "add-scenario":
-            return handle_queue_add_scenario(args)
-        elif args.queue_command == "add-latency":
-            return handle_queue_add_latency(args)
-        elif args.queue_command == "add-cachecannon":
-            return handle_queue_add_cachecannon(args)
-        elif args.queue_command == "remove":
-            return handle_queue_remove(args)
-        elif args.queue_command == "clear":
-            return handle_queue_clear(args)
-
-    parser.print_usage()
-    return 1
+    try:
+        return _dispatch(args, parser)
+    except FleetClientError as exc:
+        if getattr(args, "json", False):
+            payload = {
+                "schema_version": 1,
+                "error": True,
+                "code": exc.code,
+                "message": exc.message,
+                "exit_code": exc.exit_code,
+            }
+            if exc.details is not None:
+                payload["details"] = exc.details
+            print(json.dumps(payload, sort_keys=True))
+        else:
+            print(f"Error [{exc.code}]: {exc.message}", file=sys.stderr)
+        return exc.exit_code
 
 
 if __name__ == "__main__":
