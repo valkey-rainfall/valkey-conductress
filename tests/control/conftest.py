@@ -94,3 +94,8 @@ def auth_headers():
         "arm": {"Authorization": f"Bearer {ARM_TOKEN}"},
         "g4": {"Authorization": f"Bearer {G4_TOKEN}"},
     }
+
+
+@pytest.fixture
+def operator_token():
+    return OPERATOR_TOKEN

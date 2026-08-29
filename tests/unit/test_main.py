@@ -175,3 +175,24 @@ class TestRunnerInfoSubcommand:
         assert "armbench" in output
         assert "arm64/c7g.metal/graviton3" in output
         assert "abc123" in output
+
+
+class TestFleetControlSubcommands:
+    @pytest.mark.parametrize(
+        ("argv", "expected"),
+        [
+            (["conductress", "fleet", "list", "--json"], ["fleet", "list", "--json"]),
+            (["conductress", "remote", "list"], ["remote", "list"]),
+        ],
+    )
+    @patch("conductress.__main__.logging")
+    def test_dispatches_to_fleet_cli(self, mock_logging, argv, expected):
+        with (
+            patch("sys.argv", argv),
+            patch("conductress.fleet_cli.main", return_value=0) as fleet_main,
+            pytest.raises(SystemExit) as exit_info,
+        ):
+            main()
+
+        assert exit_info.value.code == 0
+        fleet_main.assert_called_once_with(expected)
