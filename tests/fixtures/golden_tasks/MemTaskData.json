@@ -1,0 +1,22 @@
+{
+  "source": "valkey",
+  "specifier": "abc123",
+  "replicas": 0,
+  "note": "golden",
+  "requirements": {},
+  "make_args": "",
+  "task_type": "MemTaskData",
+  "timestamp": "2026-08-29T00:00:00.123456",
+  "type": "zadd",
+  "val_sizes": [
+    20
+  ],
+  "has_expire": false,
+  "sweep_commit": "",
+  "enable_profiling": false,
+  "key_size": 0,
+  "field_size": 0,
+  "user_data_bytes": 0,
+  "populate_mode": "random",
+  "settle": false
+}

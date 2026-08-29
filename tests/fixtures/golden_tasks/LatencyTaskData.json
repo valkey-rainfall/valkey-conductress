@@ -1,0 +1,17 @@
+{
+  "source": "valkey",
+  "specifier": "abc123",
+  "replicas": 0,
+  "note": "golden",
+  "requirements": {},
+  "make_args": "",
+  "task_type": "LatencyTaskData",
+  "timestamp": "2026-08-29T00:00:00.123456",
+  "target_rps": 100000,
+  "io_threads": 9,
+  "repetitions": 3,
+  "sweep_commit": "",
+  "server_args": "",
+  "set_ratio": 0,
+  "value_size": 16
+}

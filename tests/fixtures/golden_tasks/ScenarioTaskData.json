@@ -1,0 +1,23 @@
+{
+  "source": "valkey",
+  "specifier": "abc123",
+  "replicas": 0,
+  "note": "golden",
+  "requirements": {},
+  "make_args": "",
+  "task_type": "ScenarioTaskData",
+  "timestamp": "2026-08-29T00:00:00.123456",
+  "scenario": "eval-storm",
+  "val_size": 512,
+  "io_threads": 9,
+  "pipelining": 10,
+  "duration": 30,
+  "warmup": 5,
+  "perf_stat_enabled": false,
+  "repetitions": 3,
+  "server_cpu_override": "",
+  "benchmark_cpu_override": "",
+  "background_set_ratio": 0,
+  "server_args": "",
+  "overlay_value_size": 0
+}
