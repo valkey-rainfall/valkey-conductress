@@ -215,3 +215,46 @@ class TestPublishStatus:
             "destination": "user@data:/var/www/data/",
             "timeout": 15,
         }
+
+
+class TestFleetBoundaryStatus:
+    def test_build_status_includes_read_only_mailbox_visibility(self):
+        fleet_control = {
+            "mode": "shadow",
+            "control_reachable": True,
+            "accepted_task_id": None,
+            "pending_outcomes_count": 0,
+        }
+        boundary = {
+            "state": "starting",
+            "task_id": "task-1",
+            "task_type": "PerfTaskData",
+            "timestamp": "2026-08-29T00:00:00Z",
+        }
+        with (
+            patch(
+                "conductress.status_export.get_runner_info",
+                return_value={
+                    "runner_id": "armbench",
+                    "platform": {"label": "arm64/c7g.metal/graviton3"},
+                },
+            ),
+            patch(
+                "conductress.status_export._get_runner_info",
+                return_value={"pid": 1, "state": "running", "uptime_hours": 1},
+            ),
+            patch("conductress.status_export._get_current_task", return_value=None),
+            patch("conductress.status_export._get_queue_info", return_value={"depth": 0, "tasks": []}),
+            patch("conductress.status_export._get_recent_results", return_value=[]),
+            patch("conductress.status_export._get_disk_info", return_value={}),
+        ):
+            from conductress.status_export import build_status
+
+            status = build_status(fleet_control=fleet_control, boundary=boundary)
+
+        assert status["fleet_control"] == fleet_control
+        assert status["boundary"] == boundary
+        assert status["measurement_isolation"] == {
+            "boundary_publisher_active": True,
+            "status_timer_migration_required": True,
+        }

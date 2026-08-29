@@ -196,3 +196,29 @@ class TestFleetControlSubcommands:
 
         assert exit_info.value.code == 0
         fleet_main.assert_called_once_with(expected)
+
+
+class TestFleetRunnerOptions:
+    @patch(
+        "sys.argv",
+        ["conductress", "run", "--fleet-mode", "shadow", "--management-settle", "1.5"],
+    )
+    @patch("conductress.__main__.logging")
+    def test_run_passes_fleet_mode_and_settle(self, mock_logging):
+        runner = MagicMock()
+        with (
+            patch("conductress.task_runner.TaskRunner", return_value=runner) as runner_class,
+            patch("asyncio.run"),
+        ):
+            main()
+
+        kwargs = runner_class.call_args.kwargs
+        assert kwargs["fleet_mode"] == "shadow"
+        assert kwargs["management_settle_seconds"] == 1.5
+
+    @patch("sys.argv", ["conductress", "run", "--management-settle", "-1"])
+    @patch("conductress.__main__.logging")
+    def test_negative_settle_is_usage_error(self, mock_logging):
+        with pytest.raises(SystemExit) as exit_info:
+            main()
+        assert exit_info.value.code == 2

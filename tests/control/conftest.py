@@ -99,3 +99,8 @@ def auth_headers():
 @pytest.fixture
 def operator_token():
     return OPERATOR_TOKEN
+
+
+@pytest.fixture
+def arm_runner_token():
+    return ARM_TOKEN

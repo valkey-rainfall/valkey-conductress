@@ -1,0 +1,7 @@
+[Service]
+# Keep the token itself in the owner-only default file:
+#   ~/.config/conductress/runner.token
+Environment=CONDUCTRESS_CONTROL_URL=https://data.conductress.rainsupreme.net/api/v1
+Environment=CONDUCTRESS_BOUNDARY_STATUS_ONLY=0
+ExecStart=
+ExecStart=/usr/bin/python3 -m conductress run --sweep --publish ec2-user@data.conductress.rainsupreme.net:/var/www/data --fleet-mode shadow --management-settle 2
