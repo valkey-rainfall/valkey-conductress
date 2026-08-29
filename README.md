@@ -8,6 +8,7 @@ Conductress assumes a separate machine (or machines) to run `valkey-server`, dis
 
 - [Fleet control plane and daily drift canary](docs/fleet-control-plane-implementation-plan.md) — pull-based remote inboxes, boundary-only network activity, fleet discovery, and canary rollout. Multiple same-platform runners are deferred.
 - [Fleet control service](docs/control-service.md) — Phase 2 SQLite mailbox/status API, authentication, deployment examples, and safety invariants.
+- [Fleet-aware CLI](docs/fleet-cli.md) — fleet discovery, remote queue management, secure client configuration, and runner/platform routing.
 
 ## Quick Start
 
@@ -39,7 +40,9 @@ python -m src <subcommand>
 | `tui`      | Launch the interactive TUI for monitoring and queuing tasks |
 | `run`      | Start the task runner worker that executes queued benchmarks |
 | `setup`    | Run the setup/bootstrap script to configure servers |
-| `queue`    | Manage the task queue (add, list, remove, clear) |
+| `queue`    | Manage local or remotely routed benchmark tasks |
+| `fleet`    | Discover runners and inspect fleet status |
+| `remote`   | Inspect or cancel tasks in the control-service queue |
 | `compare`  | Run statistical comparison between two specifiers |
 | `runner-info` | Show stable runner identity and environment (`--json` for automation) |
 | `status`   | Show runner and task status (non-blocking) |
