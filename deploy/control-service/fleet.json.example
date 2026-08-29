@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "runners": [
+    {
+      "runner_id": "armbench",
+      "display_name": "Graviton 3",
+      "platform": "arm64/c7g.metal/graviton3",
+      "platform_aliases": ["graviton3", "arm64"],
+      "enabled": true,
+      "canary_profile": "throughput-get-v1",
+      "status_ttl_seconds": 900
+    },
+    {
+      "runner_id": "g4bench",
+      "display_name": "Graviton 4",
+      "platform": "arm64/c8g.metal/graviton4",
+      "platform_aliases": ["graviton4"],
+      "enabled": true,
+      "canary_profile": "throughput-get-v1",
+      "status_ttl_seconds": 900
+    },
+    {
+      "runner_id": "bench",
+      "display_name": "AMD EPYC",
+      "platform": "amd64/epyc-9r14/zen4",
+      "platform_aliases": ["amd64", "amd"],
+      "enabled": true,
+      "canary_profile": "throughput-get-v1",
+      "status_ttl_seconds": 900
+    },
+    {
+      "runner_id": "intelbench",
+      "display_name": "Intel Sapphire Rapids",
+      "platform": "intel/xeon-8488c/sapphire-rapids",
+      "platform_aliases": ["intel"],
+      "enabled": true,
+      "canary_profile": "throughput-get-v1",
+      "status_ttl_seconds": 900
+    }
+  ]
+}

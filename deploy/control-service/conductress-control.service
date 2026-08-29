@@ -1,0 +1,27 @@
+[Unit]
+Description=Conductress Fleet Control Service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=conductress
+Group=conductress
+WorkingDirectory=/opt/conductress-control
+ExecStart=/opt/conductress-control/.venv/bin/conductress-control serve --port 8390
+Environment=CONTROL_DB_PATH=/var/lib/conductress-control/control.db
+Environment=FLEET_MANIFEST_PATH=/etc/conductress-control/fleet.json
+Environment=TOKENS_PATH=/etc/conductress-control/tokens.json
+Environment=AUDIT_JSONL_PATH=/var/log/conductress-control/audit.jsonl
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/conductress-control /var/log/conductress-control
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target
