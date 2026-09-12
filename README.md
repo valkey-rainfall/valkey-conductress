@@ -11,7 +11,7 @@ Conductress assumes a separate machine (or machines) to run `valkey-server`, dis
 - [Fleet-aware CLI](docs/fleet-cli.md) — fleet discovery, remote queue management, secure client configuration, and runner/platform routing.
 - [Runner fleet mailbox](docs/runner-mailbox.md) — boundary-only claim/import/accept/outcome flow, recovery journal, shadow rollout, and status-timer migration.
 - [Brand guide and assets](brand/README.md) — the Conductress mark, lockups, palette, terminal and animated versions, and the rules for using them.
-- [Dragonfly as a comparator engine](docs/dragonfly-comparator-plan.md) — plan for a pinned-release reference engine: prebuilt provisioning, launch profiles, pinned-series semantics, fleet rollout. Not started.
+- [Dragonfly as a comparator engine](docs/dragonfly-comparator-plan.md) — plan for a tracked-release reference engine: prebuilt provisioning, auto-bump on new releases, launch profiles, stepped-series semantics, fleet rollout. Not started.
 
 ## Quick Start
 

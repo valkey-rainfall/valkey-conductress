@@ -13,7 +13,7 @@ reference line, as Redis is today.
 
 ## Non-goals
 
-- Bisecting Dragonfly history. It is a pinned release re-measured on cadence, not
+- Bisecting Dragonfly history. It is a tracked release, measured as each release ships, not
   a swept ref.
 - Profiling Dragonfly internals. Same posture as Redis: aggregate numbers only.
 - Cluster mode, persistence, replication, or any workload beyond the GET/SET/mixed
@@ -54,8 +54,9 @@ Every engine is a Redis-lineage git tree. Three places encode that:
 3. **Series.** `sweep/coordinator.py` populates `merge_commits` from the ref and
    bisects them; `sweep/exporter.py` emits `series-{platform}-{workload}-*.json`
    keyed by commit; `publisher.py` and the coordinator map `engine.source` to a
-   GitHub repo for commit links (`redis/redis` else `valkey-io/valkey`). A pinned
-   release has one "commit" and a version string, and re-measures over time.
+   GitHub repo for commit links (`redis/redis` else `valkey-io/valkey`). A tracked
+   release engine's "commits" are release tags that arrive monthly, each measured
+   once and then re-measured over time.
 
 Two smaller ones:
 
@@ -82,7 +83,8 @@ class SweepEngine:
     binary_name: str
     kind: str = "redis-lineage"          # or "prebuilt-release"
     ref: Optional[str] = None            # redis-lineage: git ref to sweep
-    release: Optional[str] = None        # prebuilt-release: pinned tag, e.g. "v1.40.2"
+    release_repo: Optional[str] = None   # prebuilt-release: GitHub owner/repo whose releases are tracked
+    release_channel: str = "latest"      # prebuilt-release: "latest" (non-prerelease) or an exact tag to hold
     release_asset: Optional[str] = None  # prebuilt-release: asset name pattern with {arch}
     launch: str = "valkey"               # launch profile name (see below)
     thread_flag: str = "--io-threads"
@@ -97,12 +99,16 @@ Existing entries keep working with defaults. Dragonfly:
 ```python
 SweepEngine(
     source="dragonfly", binary_name="dragonfly", kind="prebuilt-release",
-    release="v1.40.2",
+    release_repo="dragonflydb/dragonfly", release_channel="latest",
     release_asset="dragonfly-{arch}.tar.gz",   # confirm exact names on the release page
     launch="dragonfly", thread_flag="--proactor_threads", cpu_overhead=0,
     profile_internals=False,
 )
 ```
+
+`release_channel="latest"` is the normal mode: the engine follows Dragonfly's
+releases automatically (see "Release tracking"). Setting it to an exact tag holds
+the pin, for a bisection by hand or to freeze a comparator during a report.
 
 ### Provisioning (binary_manager)
 
@@ -121,7 +127,7 @@ build both paths up front; decide after the asset check in step 1 below.
 Factor the Valkey command-line construction into a `valkey` profile and add a
 `dragonfly` profile. Both receive `(binary, port, threads, cpus, logfile,
 extra_args)` and return a shell command. Dragonfly, to be confirmed against
-`dragonfly --helpfull` on the pinned release:
+`dragonfly --helpfull` on the current release:
 
 ```
 taskset -c {cpus} {binary} --port {port} --bind 0.0.0.0
@@ -139,23 +145,58 @@ Thread pinning: Dragonfly has `--proactor_affinity_mode`; with `taskset` on the
 whole process and `proactor_threads == len(cpus)` the placement is equivalent to
 the Valkey cpulist flags for benchmarking purposes.
 
+### Release tracking (auto-bump)
+
+Dragonfly ships a tagged release with prebuilt binaries roughly monthly (nine in
+the first eight months of 2026; feature releases every six to eight weeks, patch
+releases between, sometimes two days apart). The engine follows them without a
+human in the loop:
+
+- On each scheduling round the coordinator resolves `release_channel`. For
+  `"latest"` it calls `GET /repos/{release_repo}/releases/latest` (unauthenticated
+  is fine at this rate; the runner's existing GitHub token if one is configured),
+  which excludes pre-releases and drafts by definition. The result is cached for
+  an hour so the fleet does not poll GitHub per cell.
+- A new tag becomes a new entry in the tracked engine's commit list, exactly as a
+  new merge commit does for Valkey. The binary is provisioned into the build cache
+  under the new tag on first use; the old tag's binary stays cached so a hold-back
+  or a manual comparison needs no re-download.
+- Every release is measured once per platform when it appears, then re-measured
+  on the drift-canary cadence while it is current. The series therefore has two
+  kinds of points: a release step and a drift sample, tagged in `metadata` so the
+  dashboard can draw the step and the band differently.
+- Hold-back: `release_channel="v1.40.2"` freezes the engine on that tag. Use it
+  when a release breaks a launch flag or the parser, and file the follow-up. The
+  runner logs a warning on every round while a newer release exists so a hold
+  does not silently become permanent.
+- Failure mode to design for: a release whose assets are missing for one arch
+  (arm64 has historically lagged). Resolution fails for that platform only; that
+  platform keeps measuring the previous tag and the status page shows the
+  mismatch. Never let one platform's asset gap block the others.
+
+This means a Dragonfly regression shows up as a step down that persists until
+their next release. That is what a user downloading Dragonfly would experience,
+and the methodology text should say so: the line is Dragonfly as shipped, not
+Dragonfly's `main`.
+
 ### Series semantics
 
-A pinned-release engine has exactly one commit. Add a coordinator mode for it:
-`merge_commits = [release]`, no bisection, re-measure on the canary cadence so
-the series shows drift over time (host and kernel changes) rather than over
-commits. The exporter emits the same `series-{platform}-{workload}-*.json` with
-`metadata.engine = "dragonfly"` and `metadata.pinned = "v1.40.2"`; the dashboard
-draws a pinned series as a flat reference band across the Valkey x-axis (date),
-which is also how Redis 8.0.0's floor should probably be drawn.
+A tracked-release engine's commit list is its release tags, newest last. Add a
+coordinator mode for it: no bisection, each new tag measured once on appearance,
+the current tag re-measured on the canary cadence. The exporter emits the same
+`series-{platform}-{workload}-*.json` with `metadata.engine = "dragonfly"`,
+`metadata.release = "v1.40.2"` and `metadata.sample = "release" | "drift"`. The
+dashboard draws a tracked-release series as a stepped band across the date axis
+with a label at each step; the same rendering suits Redis's 8.0.0 floor.
 
 Commit links: extend the `engine.source -> repo` mapping to
-`dragonflydb/dragonfly` and link releases, not commits, for pinned engines.
+`dragonflydb/dragonfly` and link release pages, not commits, for tracked-release
+engines.
 
 ### Dashboard
 
 - Engine selector gains Dragonfly. `compare.html` becomes three-way.
-- Pinned series render as a horizontal band with the release label.
+- Tracked-release series render as a stepped band with a label at each release; drift samples within a release draw as the band, release steps as markers.
 - The methodology text gains a paragraph: Dragonfly version, flags, thread
   count, the note that `MGET` across shards pays a multi-shard transaction
   Valkey does not, and that cluster-mode emulation is off.
@@ -188,6 +229,10 @@ Commit links: extend the `engine.source -> repo` mapping to
   existing tests pass.
 - Dragonfly GET/SET/mixed series on all four platforms, with the parameter
   table published.
+- A new Dragonfly release is measured on every platform within one scheduling
+  day of appearing on GitHub, with no human action; a held-back channel logs a
+  warning each round; an arch with missing assets keeps its previous tag and
+  is visible on the status page.
 - No flamegraph, jemalloc or symbol data collected for Dragonfly (same as Redis).
 - The guide's brand rule holds: the comparator is presented as a reference line,
   the dashboard title and identity are unchanged.
@@ -199,14 +244,14 @@ Commit links: extend the `engine.source -> repo` mapping to
   5.10+ is assumed sufficient.
 - Whether `SHUTDOWN NOSAVE` and `INFO` field names match closely enough for the
   existing parsers; `INFO` is Redis-compatible by design but has extra sections.
-- Pinning cadence: daily like the drift canary, or weekly.
-- Whether to also pin a Valkey release as a band, so Dragonfly is compared to a
+- Drift re-measure cadence within a release: daily like the drift canary, or weekly.
+- Whether to also track Valkey releases as a stepped band, so Dragonfly is compared to a
   release as well as to unstable head.
 
 ## Effort
 
 Two to three days to the first published series: one day for provisioning and
-launch profiles, half a day for the pinned-series mode, half a day for the
+launch profiles, half a day for the tracked-release mode and GitHub polling, half a day for the
 dashboard, the rest for the fleet steps and a rollout that waits on real cells.
 Garnet afterwards: one more day (reuses kinds, profiles and series mode; adds a
 .NET runtime install and its own launch profile; `MSET` is non-atomic by
