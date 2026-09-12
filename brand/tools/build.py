@@ -766,14 +766,19 @@ def png(svg_path: Path, out: Path, width: int) -> None:
 
 
 def ico(mark16: Path, mark32: Path, out: Path) -> None:
+    """16 + 32 + 48 in one .ico. Pillow drops any requested size larger than the
+    base image, so the 48px frame must be the base and the smaller ones appended."""
     import cairosvg
     from PIL import Image
 
-    frames = []
-    for src, size in ((mark16, 16), (mark32, 32), (mark32, 48)):
+    def frame(src, size):
         buf = io.BytesIO(cairosvg.svg2png(url=str(src), output_width=size, output_height=size))
-        frames.append(Image.open(buf).convert("RGBA"))
-    frames[0].save(out, format="ICO", sizes=[(16, 16), (32, 32), (48, 48)], append_images=frames[1:])
+        return Image.open(buf).convert("RGBA")
+
+    f48, f32, f16 = frame(mark32, 48), frame(mark32, 32), frame(mark16, 16)
+    f48.save(out, format="ICO", sizes=[(48, 48), (32, 32), (16, 16)], append_images=[f32, f16])
+    check = Image.open(out)
+    assert sorted(check.info["sizes"]) == [(16, 16), (32, 32), (48, 48)], check.info["sizes"]
     print("wrote", out.relative_to(ROOT.parent))
 
 
