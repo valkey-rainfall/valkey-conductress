@@ -12,11 +12,14 @@ from conductress import config
 from conductress.tasks.task_perf_benchmark import (
     BASE_KEY_PATTERN,
     BASE_KEY_SIZE,
+    HGETALL_FIELDS,
+    HGETALL_KEYSPACE,
     CanaryPerfTaskData,
     PerfTaskData,
     PerfTaskRunner,
     compute_aggregated_stats,
     generate_padded_key,
+    hgetall_preload_command,
 )
 
 
@@ -231,6 +234,80 @@ class TestZsetBatteryTests:
         """No other test overrides the timed keyspace (they share PERF_BENCH_KEYSPACE)."""
         overriding = {name for name, t in PerfTaskRunner.tests.items() if t.keyspace is not None}
         assert overriding == {"zpop"}
+
+
+class TestHgetallManyHashes:
+    """Tests for the multi-key CPU-heavy hgetall test: HGETALL over many
+    independent 100-field hashes (the regime per-slot dispatch designs target,
+    as opposed to the single-key zrange/zscore tests)."""
+
+    def test_hgetall_entry_shape(self):
+        entry = PerfTaskRunner.tests["hgetall"]
+        assert entry.name == "hgetall"
+        assert entry.test_command == " -- HGETALL hash:__rand_int__"
+        assert entry.keyspace is None  # timed -r == resident set, not widened
+        assert entry.resident_keyspace == HGETALL_KEYSPACE == 100_000
+
+    def test_preload_is_one_variadic_hset_with_100_data_fields(self):
+        """Preload uses only legacy-generator placeholders (__rand_int__, __data__)
+        and fixed field names so every hash has an identical, deterministic shape."""
+        cmd = PerfTaskRunner.tests["hgetall"].preload_command
+        assert cmd is not None
+        assert cmd.startswith(" -- HSET hash:__rand_int__ ")
+        assert cmd.count("__data__") == HGETALL_FIELDS == 100
+        assert cmd.count("__rand_int__") == 1  # only the key varies
+        assert " f000 __data__ " in cmd and cmd.endswith(" f099 __data__")
+        assert "__rand_field__" not in cmd and "--count" not in cmd  # not in d2eee78a
+        assert cmd == hgetall_preload_command()
+
+    def test_only_hgetall_sets_resident_keyspace(self):
+        overriding = {name for name, t in PerfTaskRunner.tests.items() if t.resident_keyspace is not None}
+        assert overriding == {"hgetall"}
+
+    def test_resident_keyspace_defaults_to_task_keyspace(self):
+        runner = _make_runner("get")
+        assert runner.resident_keyspace == runner.keyspace == config.PERF_BENCH_KEYSPACE
+        runner.keyspace = 4321  # prepare_task_runner assigns after construction
+        assert runner.resident_keyspace == 4321
+
+    def test_hgetall_resident_keyspace_wins_over_task_keyspace(self):
+        runner = _make_runner("hgetall")
+        runner.keyspace = config.PERF_BENCH_KEYSPACE
+        assert runner.resident_keyspace == HGETALL_KEYSPACE
+
+    def test_hgetall_timed_command_uses_resident_keyspace(self):
+        """The timed -r must equal the preloaded set: a wider -r would make most
+        HGETALLs miss (empty replies), a narrower one would under-cover it."""
+        runner = _make_runner("hgetall")
+        client = MagicMock()
+        client.ip = "127.0.0.1"
+        client._cpu_allocator.get_net_interface_numa.return_value = 0
+        command = runner._build_benchmark_command(client, "127.0.0.1", None)
+        assert f"-r {HGETALL_KEYSPACE} " in command
+        assert f"-r {config.PERF_BENCH_KEYSPACE} " not in command
+        assert command.rstrip().endswith("-- HGETALL hash:__rand_int__")
+
+    def test_zpop_timed_keyspace_still_wins_over_resident(self):
+        """Regression guard: the zpop widening override is unaffected."""
+        runner = _make_runner("zpop")
+        client = MagicMock()
+        client.ip = "127.0.0.1"
+        client._cpu_allocator.get_net_interface_numa.return_value = 0
+        command = runner._build_benchmark_command(client, "127.0.0.1", None)
+        assert f"-r {PerfTaskRunner.ZPOP_APPEND_KEYSPACE} " in command
+
+    def test_hgetall_padded_key_commands(self):
+        """key_size>0 pads the hash key in both preload and timed commands."""
+        runner = _make_runner("hgetall", key_size=64)
+        padded_key = generate_padded_key(64)
+        assert runner.preload_command == hgetall_preload_command(padded_key)
+        assert runner.test_command == f" -- HGETALL {padded_key}"
+        assert runner.preload_command is not None
+        assert runner.preload_command.count("__data__") == HGETALL_FIELDS
+
+    def test_hgetall_preload_helper_respects_field_count(self):
+        cmd = hgetall_preload_command("k", fields=3)
+        assert cmd == " -- HSET k f000 __data__ f001 __data__ f002 __data__"
 
 
 class TestPerfTaskDataSerialization:

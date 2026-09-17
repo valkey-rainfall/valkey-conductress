@@ -58,6 +58,33 @@ def generate_padded_key(key_size: int) -> str:
     return BASE_KEY_PATTERN + padding
 
 
+# hgetall: multi-key, CPU-heavy read over many independent hashes. Each hash has
+# HGETALL_FIELDS fields (mirrors the zset battery's 100-element tier); field
+# values are ``-d`` bytes wide (the task's --sizes lever), so the reply is
+# ~100 x (field + value). Use a small value size (16-64B) for a CPU-bound
+# signal; 512B+ makes the cell bandwidth-shaped (~52KB replies). The resident
+# set is HGETALL_KEYSPACE hashes: enough to defeat cache locality and to spread
+# over all 16384 cluster slots (~6 hashes/slot), which is what distinguishes
+# this from the single-key zrange/zscore tests (one key = one slot = one worker
+# under per-slot dispatch designs). ~1 GB resident at 64B values, ~6 GB at 512B.
+HGETALL_FIELDS = 100
+HGETALL_KEYSPACE = 100_000
+HGETALL_KEY_PATTERN = "hash:__rand_int__"
+
+
+def hgetall_preload_command(key: str = HGETALL_KEY_PATTERN, fields: int = HGETALL_FIELDS) -> str:
+    """One variadic HSET creating ``fields`` fields of ``__data__`` on ``key``.
+
+    Uses only placeholders the pinned legacy generator (d2eee78a) supports:
+    ``__rand_int__`` in the key (driven sequentially by the preload's
+    ``--sequential -r N -n N``) and ``__data__`` for each value (sized by
+    ``-d``). Field names are fixed ``f000..f099`` so every hash is identical in
+    shape and HGETALL's reply size is deterministic.
+    """
+    pairs = " ".join(f"f{i:03d} __data__" for i in range(fields))
+    return f" -- HSET {key} {pairs}"
+
+
 def compute_aggregated_stats(per_run_rps: list[float]) -> tuple[float, float]:
     """Compute mean RPS and 95% confidence interval from per-run RPS values.
 
@@ -213,10 +240,18 @@ class PerfTaskRunner(BaseTaskRunner):
         test_command: str
         expire_command: Optional[str] = None
         # Optional per-test override for the timed benchmark's -r keyspace.
-        # Preload always fills PERF_BENCH_KEYSPACE; this only widens the -r used
-        # during measurement (needed by zpop, whose append must draw from a
-        # namespace far larger than the resident set to avoid draining it).
+        # Preload always fills the resident keyspace; this only widens the -r
+        # used during measurement (needed by zpop, whose append must draw from
+        # a namespace far larger than the resident set to avoid draining it).
         keyspace: Optional[int] = None
+        # Optional per-test override for the RESIDENT keyspace: the number of
+        # distinct keys the preload creates AND the timed run reads over.
+        # Unlike ``keyspace`` it applies to both phases. Needed when each key
+        # is a large container (hgetall: 100 fields per hash), so filling the
+        # task-level PERF_BENCH_KEYSPACE (3M keys) would take ~100x the memory
+        # of the string-key tests. Part of the test's identity, like zrange's
+        # ``--count 100``, so it is not a CLI knob.
+        resident_keyspace: Optional[int] = None
 
     # Append namespace for the zpop sliding-window test. ZPOPMIN never misses,
     # so a 50/50 pop/append drains with time-constant = append-keyspace (in
@@ -224,6 +259,12 @@ class PerfTaskRunner(BaseTaskRunner):
     # the ~3M resident set from draining more than ~25%, so it never empties and
     # ZPOPMIN (O(1)) throughput stays representative.
     ZPOP_APPEND_KEYSPACE = 2_000_000_000
+
+    # hgetall: multi-key, CPU-heavy read over many independent hashes. See the
+    # module-level HGETALL_* constants and hgetall_preload_command() for the
+    # shape rationale.
+    HGETALL_FIELDS = HGETALL_FIELDS
+    HGETALL_KEYSPACE = HGETALL_KEYSPACE
 
     tests: dict[str, Test] = {
         "set": Test(
@@ -310,6 +351,16 @@ class PerfTaskRunner(BaseTaskRunner):
             name="mget",
             preload_command="-t set",
             test_command=" -- MGET key:__rand_int__ key:__rand_int__ key:__rand_int__ key:__rand_int__",
+        ),
+        # Multi-key CPU-heavy read: HGETALL of a random 100-field hash drawn
+        # from HGETALL_KEYSPACE independent hashes (see module constants).
+        # Single-key on the wire, so it is cluster-safe (no CROSSSLOT), but the
+        # keys span all slots -- the regime per-slot dispatch designs target.
+        "hgetall": Test(
+            name="hgetall",
+            preload_command=hgetall_preload_command(),
+            test_command=f" -- HGETALL {HGETALL_KEY_PATTERN}",
+            resident_keyspace=HGETALL_KEYSPACE,
         ),
     }
 
@@ -432,6 +483,16 @@ class PerfTaskRunner(BaseTaskRunner):
         # Initialize status
         self.status = BenchmarkStatus(steps_total=self.warmup + self.duration, task_type=f"perf-{test}")
 
+    @property
+    def resident_keyspace(self) -> int:
+        """Number of distinct keys preloaded and read over during the timed run.
+
+        A test-level ``resident_keyspace`` (hgetall) wins over the task-level
+        keyspace; resolved lazily because ``prepare_task_runner`` may assign
+        ``self.keyspace`` after construction.
+        """
+        return self.test.resident_keyspace or self.keyspace
+
     def _build_custom_command(self, test: "PerfTaskRunner.Test", padded_key: str, is_preload: bool) -> Optional[str]:
         """Build a custom command string for the given test type using the padded key.
 
@@ -458,6 +519,7 @@ class PerfTaskRunner(BaseTaskRunner):
                 "zrandmember": f" -- ZADD {padded_key} __rand_int__ element:__rand_int__",
                 "zrem": f" -- ZADD {padded_key} __rand_int__ element:__rand_int__",
                 "zpop": f" -- ZADD {padded_key} __rand_int__ element:__rand_int__",
+                "hgetall": hgetall_preload_command(padded_key),
             }
             return preload_map[name]
         else:
@@ -478,6 +540,7 @@ class PerfTaskRunner(BaseTaskRunner):
                 "zrandmember": f" -- ZRANDMEMBER {padded_key} 100",
                 "zrem": f" -- ZADD {padded_key} __rand_int__ element:__rand_int__ ';' ZREM {padded_key} element:__rand_int__",
                 "zpop": f" -- ZPOPMIN {padded_key} ';' ZADD {padded_key} __rand_int__ nm:__rand_int__",
+                "hgetall": f" -- HGETALL {padded_key}",
             }
             return test_map[name]
 
@@ -555,7 +618,7 @@ class PerfTaskRunner(BaseTaskRunner):
                 "has_expire": self.has_expire,
                 "size": self.valsize,
                 "key_size": self.key_size,
-                "keyspace": self.keyspace,
+                "keyspace": self.resident_keyspace,
                 "seed": self.seed,
                 "preload_keys": self.preload_keys,
                 "perf_stat_enabled": self.perf_stat_enabled,
@@ -605,7 +668,7 @@ class PerfTaskRunner(BaseTaskRunner):
                 "has_expire": self.has_expire,
                 "size": self.valsize,
                 "key_size": self.key_size,
-                "keyspace": self.keyspace,
+                "keyspace": self.resident_keyspace,
                 "seed": self.seed,
                 "preload_keys": self.preload_keys,
                 "perf_stat_enabled": self.perf_stat_enabled,
@@ -712,13 +775,15 @@ class PerfTaskRunner(BaseTaskRunner):
                 # Preload data
                 if self.preload_keys and self.preload_command is not None:
                     await server.run_valkey_command_over_keyspace(
-                        self.keyspace, f"-d {self.valsize} {self.preload_command}"
+                        self.resident_keyspace, f"-d {self.valsize} {self.preload_command}"
                     )
                     if self.has_expire:
                         if not self.test.expire_command:
                             self.logger.warning("Expire command not available, skipping expiration")
                         else:
-                            await server.run_valkey_command_over_keyspace(self.keyspace, self.test.expire_command)
+                            await server.run_valkey_command_over_keyspace(
+                                self.resident_keyspace, self.test.expire_command
+                            )
 
                 # Setup client CPU allocation (once)
                 if client is None:
@@ -892,10 +957,12 @@ class PerfTaskRunner(BaseTaskRunner):
             if self._is_local_benchmark(target_ip):
                 bench_target = get_primary_interface_ip()
 
-        # Per-test overrides (currently zpop) take precedence over the
-        # task-level keyspace. A nonzero seed freezes random key selection.
+        # Per-test overrides take precedence over the task-level keyspace:
+        # ``Test.keyspace`` (zpop) widens only the timed -r; ``resident_keyspace``
+        # (hgetall) governs both preload and timed run. A nonzero seed freezes
+        # random key selection.
         finite_request_count = int(getattr(self, "finite_request_count", 0))
-        keyspace = finite_request_count or self.test.keyspace or getattr(self, "keyspace", PERF_BENCH_KEYSPACE)
+        keyspace = finite_request_count or self.test.keyspace or self.resident_keyspace
         seed = getattr(self, "seed", 0)
         seed_arg = f" --seed {seed}" if seed else ""
         iteration_args = (
