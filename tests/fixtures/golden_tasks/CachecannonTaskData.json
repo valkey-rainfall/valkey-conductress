@@ -46,5 +46,6 @@
   "score_metric": "throughput",
   "score_aggregate": "mean",
   "tls": false,
-  "client_netns": ""
+  "client_netns": "",
+  "processes": 1
 }
