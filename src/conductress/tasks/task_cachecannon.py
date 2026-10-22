@@ -21,7 +21,9 @@ from typing import Any, Literal, Optional
 from conductress.cachecannon import (  # noqa: F401  (re-exported for callers/tests)
     DEFAULT_CACHECANNON_BINARY,
     generate_toml_config,
+    merge_parsed_results,
     parse_json_results,
+    split_generator,
     workload_issues_gets,
 )
 from conductress.config import (
@@ -240,6 +242,18 @@ class CachecannonTaskData(BaseTaskData):
     # series, never compared cell-for-cell against a loopback cell.
     client_netns: str = ""
 
+    # Number of concurrent cachecannon processes that together form the
+    # generator (default 1 = unchanged behaviour). One process walls at roughly
+    # 22-25M ops/s on a c8gn.48xlarge whatever its thread/connection count;
+    # several processes on the same host scale almost linearly (2 -> 2.2x,
+    # 4 -> 4.3x, measured 2026-10-22). ``connections`` and ``threads`` stay the
+    # TOTALS and are divided across the processes; an explicit client cpulist is
+    # cut into disjoint slices. Per-rep throughput is the sum, hit rate is
+    # recomputed from summed hits/misses, error_pct is the worst process, and
+    # the recorded latency block is the process with the highest p99 (with the
+    # per-process p50/p99 kept alongside). See cachecannon.split_generator.
+    processes: int = 1
+
     def __post_init__(self):
         super().__post_init__()
         self.warmup = int(self.warmup)
@@ -326,6 +340,7 @@ class CachecannonTaskData(BaseTaskData):
             score_aggregate=self.score_aggregate,
             tls=self.tls,
             client_netns=self.client_netns,
+            processes=self.processes,
         )
 
 
@@ -371,6 +386,7 @@ class CachecannonTaskRunner(BaseTaskRunner):
         score_aggregate: str = "mean",
         tls: bool = False,
         client_netns: str = "",
+        processes: int = 1,
     ):
         super().__init__(task_id)
         self.logger = logging.getLogger(f"{self.__class__.__name__}.{test}")
@@ -410,6 +426,9 @@ class CachecannonTaskRunner(BaseTaskRunner):
         self.info_sections = list(info_sections or [])
         self.tls = tls
         self.client_netns = client_netns
+        if processes < 1:
+            raise ValueError(f"processes must be >= 1, got {processes}")
+        self.processes = processes
         # TLS transport: the server opens a second listener on the TLS port with
         # the bootstrap test certificates and the generator connects over it
         # (endpoint pointed at self._tls_port, [target] tls keys emitted below).
@@ -620,33 +639,45 @@ class CachecannonTaskRunner(BaseTaskRunner):
                     target_ip = get_primary_interface_ip()
                 endpoint = f"{target_ip}:{target_port}"
 
-                toml_content = generate_toml_config(
-                    duration=self.duration,
-                    warmup=self.warmup,
-                    threads=self.threads,
-                    cpu_list=cpu_list,
-                    endpoint=endpoint,
-                    connections=self.connections,
-                    pipeline_depth=self.pipelining,
-                    keyspace_count=self.keyspace_count,
-                    val_size=self.val_size,
-                    test=self.test,
-                    set_ratio=self.set_ratio,
-                    distribution=self.distribution,
-                    rate_limit=self.rate_limit,
-                    tls=self.tls,
-                    tls_hostname=server.ip if self.tls else "",
-                    tls_ca_file=f"{TLS_CERT_DIR}/ca.crt" if self.tls else "",
+                # One TOML per generator process. processes == 1 reproduces the
+                # single-process files byte for byte (same name, same content).
+                plan = split_generator(self.processes, self.connections, self.threads, cpu_list)
+                toml_paths: list[str] = []
+                command_strings: list[str] = []
+                for pidx, part in enumerate(plan):
+                    toml_content = generate_toml_config(
+                        duration=self.duration,
+                        warmup=self.warmup,
+                        threads=part["threads"],
+                        cpu_list=part["cpu_list"],
+                        endpoint=endpoint,
+                        connections=part["connections"],
+                        pipeline_depth=self.pipelining,
+                        keyspace_count=self.keyspace_count,
+                        val_size=self.val_size,
+                        test=self.test,
+                        set_ratio=self.set_ratio,
+                        distribution=self.distribution,
+                        rate_limit=self.rate_limit // self.processes if self.rate_limit else 0,
+                        tls=self.tls,
+                        tls_hostname=server.ip if self.tls else "",
+                        tls_ca_file=f"{TLS_CERT_DIR}/ca.crt" if self.tls else "",
+                    )
+                    suffix = "" if self.processes == 1 else f"_p{pidx+1}"
+                    toml_path = str(self.file_protocol.work_dir / f"cachecannon_rep{rep+1}{suffix}.toml")
+                    with open(toml_path, "w") as f:
+                        f.write(toml_content)
+                    toml_paths.append(toml_path)
+                    command_strings.append(self._build_command(toml_path, part["cpu_list"]))
+                command_string = command_strings[0]
+                self.logger.info(
+                    "Starting cachecannon (rep %d/%d, %d process%s): %s",
+                    rep + 1,
+                    effective_reps,
+                    self.processes,
+                    "" if self.processes == 1 else "es",
+                    command_string,
                 )
-
-                # Write TOML to result directory
-                toml_path = str(self.file_protocol.work_dir / f"cachecannon_rep{rep+1}.toml")
-                with open(toml_path, "w") as f:
-                    f.write(toml_content)
-
-                # Build and execute cachecannon command
-                command_string = self._build_command(toml_path, cpu_list)
-                self.logger.info("Starting cachecannon (rep %d/%d): %s", rep + 1, effective_reps, command_string)
 
                 self.status.state = "running"
                 self.file_protocol.write_status(self.status)
@@ -673,44 +704,62 @@ class CachecannonTaskRunner(BaseTaskRunner):
                 info_t1: Optional[dict[str, dict[str, str]]] = None
                 info_t1_time: Optional[float] = None
                 output_lines: list[str] = []
+                outputs: list[list[str]] = [[] for _ in command_strings]
+                commands: list[RealtimeCommand] = []
                 mem_sampler: Optional[MemorySampler] = None
                 memory_resets: Optional[dict[str, dict[str, Any]]] = None
                 try:
-                    # Launch cachecannon -- it handles its own prefill and warmup
-                    command = RealtimeCommand(command_string)
-                    command.start()
+                    # Launch every generator process -- each handles its own
+                    # prefill (idempotent SETs of the same keyspace) and warmup.
+                    for cs in command_strings:
+                        c = RealtimeCommand(cs)
+                        c.start()
+                        commands.append(c)
+                    command = commands[0]
 
                     # Collect output (cachecannon runs to completion).
                     # CPU telemetry: sample_process_tree_cpu returns None once the
                     # root exits, so refresh the last-known sample each poll cycle.
+                    # With several processes the samples are summed across trees.
+                    def _sample_all() -> Optional[float]:
+                        total = 0.0
+                        seen = False
+                        for c in commands:
+                            if c.p:
+                                s = sample_process_tree_cpu(c.p.pid)
+                                if s is not None:
+                                    total += s
+                                    seen = True
+                        return total if seen else None
+
                     client_cpu_t0 = time.monotonic()
-                    client_cpu_s0 = sample_process_tree_cpu(command.p.pid) if command.p else None
+                    client_cpu_s0 = _sample_all()
                     client_cpu_t1: Optional[float] = None
                     client_cpu_s1: Optional[float] = None
-                    while command.is_running():
-                        line, _ = command.poll_output()
-                        while line is not None and line != "":
-                            output_lines.append(line)
-                            if not window_started and is_scored_sample_line(line):
-                                window_started = True
-                                # Scored window just opened: reset the kernel/
-                                # cgroup peaks and record the engine floors so
-                                # data.memory excludes cachecannon's prefill and
-                                # warmup, then begin 1 Hz memory sampling on its
-                                # own connection (independent of the perf/info
-                                # opt-ins below).
-                                if mem_sampler is None:
-                                    memory_resets = await reset_memory_peaks(
-                                        servers_by_role(server, topology_group.replicas)
-                                    )
-                                    mem_sampler = MemorySampler(server.ip, server.port)
-                                    mem_sampler.start()
-                            line, _ = command.poll_output()
-                        if command.p:
-                            sample = sample_process_tree_cpu(command.p.pid)
-                            if sample is not None:
-                                client_cpu_s1 = sample
-                                client_cpu_t1 = time.monotonic()
+                    while any(c.is_running() for c in commands):
+                        for pidx, c in enumerate(commands):
+                            line, _ = c.poll_output()
+                            while line is not None and line != "":
+                                outputs[pidx].append(line)
+                                if not window_started and is_scored_sample_line(line):
+                                    window_started = True
+                                    # Scored window just opened: reset the kernel/
+                                    # cgroup peaks and record the engine floors so
+                                    # data.memory excludes cachecannon's prefill and
+                                    # warmup, then begin 1 Hz memory sampling on its
+                                    # own connection (independent of the perf/info
+                                    # opt-ins below).
+                                    if mem_sampler is None:
+                                        memory_resets = await reset_memory_peaks(
+                                            servers_by_role(server, topology_group.replicas)
+                                        )
+                                        mem_sampler = MemorySampler(server.ip, server.port)
+                                        mem_sampler.start()
+                                line, _ = c.poll_output()
+                        sample = _sample_all()
+                        if sample is not None:
+                            client_cpu_s1 = sample
+                            client_cpu_t1 = time.monotonic()
                         if window_started and not perf_armed and not cpu_profile_armed and info_t0 is None:
                             # First poll after the scored window opened: arm everything.
                             if self.perf_stat_enabled:
@@ -750,11 +799,13 @@ class CachecannonTaskRunner(BaseTaskRunner):
                         if perf_t0 is not None:
                             self._perf_windows_seconds.append(time.monotonic() - perf_t0)
 
-                    # Drain remaining output
-                    line, _ = command.poll_output()
-                    while line is not None and line != "":
-                        output_lines.append(line)
-                        line, _ = command.poll_output()
+                    # Drain remaining output from every process
+                    for pidx, c in enumerate(commands):
+                        line, _ = c.poll_output()
+                        while line is not None and line != "":
+                            outputs[pidx].append(line)
+                            line, _ = c.poll_output()
+                    output_lines = [ln for out in outputs for ln in out]
 
                     # Collect perf stat counters per rep and sum across reps.
                     if perf_armed:
@@ -807,15 +858,21 @@ class CachecannonTaskRunner(BaseTaskRunner):
                 if info_t0 is not None and info_t1 is not None and info_t0_time and info_t1_time:
                     self._info_deltas_per_rep.append(info_window_deltas(info_t0, info_t1, info_t1_time - info_t0_time))
 
-                # Check exit code (is_running() returned False, so p.poll() has run)
-                exit_code = command.p.returncode if command.p else None
-                if exit_code != 0:
-                    full_output = "\n".join(output_lines)
-                    raise RuntimeError(f"cachecannon exited with code {exit_code}. Output:\n{full_output[-2000:]}")
+                # Check exit codes (is_running() returned False for all, so p.poll() has run)
+                for pidx, c in enumerate(commands):
+                    exit_code = c.p.returncode if c.p else None
+                    if exit_code != 0:
+                        full_output = "\n".join(outputs[pidx])
+                        raise RuntimeError(
+                            f"cachecannon process {pidx+1}/{len(commands)} exited with code {exit_code}. "
+                            f"Output:\n{full_output[-2000:]}"
+                        )
 
-                # Parse results (exact values from cachecannon's JSON output)
+                # Parse results (exact values from cachecannon's JSON output), one
+                # per process, then merge (sum throughput, worst error_pct, hit
+                # rate from summed hits/misses, pessimistic latency block).
                 full_output = "\n".join(output_lines)
-                parsed = parse_json_results(full_output)
+                parsed = merge_parsed_results([parse_json_results("\n".join(out)) for out in outputs])
 
                 # Fail loudly on errors or low hit rate
                 if parsed["error_pct"] > 0:
@@ -947,6 +1004,7 @@ class CachecannonTaskRunner(BaseTaskRunner):
             "pipeline": self.pipelining,
             "connections": self.connections,
             "threads": self.threads,
+            "processes": self.processes,
             "size": self.val_size,
             "keyspace_count": self.keyspace_count,
             "set_ratio": self.set_ratio,

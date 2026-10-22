@@ -911,6 +911,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Expert: explicit cpulist override for cachecannon client",
     )
     cc_parser.add_argument(
+        "--processes",
+        type=int,
+        default=1,
+        help="Concurrent cachecannon processes forming the generator (default: 1). "
+        "--connections and --threads stay the totals and are divided across them; "
+        "an explicit --client-cpus list is cut into disjoint slices. One process "
+        "walls at roughly 22-25M ops/s; use >1 to drive a server past that.",
+    )
+    cc_parser.add_argument(
         "--client-netns",
         type=str,
         default="",
@@ -1728,6 +1737,7 @@ def handle_queue_add_cachecannon(args: argparse.Namespace) -> int:
         perf_stat_enabled=args.perf_stat,
         info_sections=args.info_sections,
         client_netns=args.client_netns,
+        processes=args.processes,
     )
     queue.submit_task(task)
     submission = queue.finish()

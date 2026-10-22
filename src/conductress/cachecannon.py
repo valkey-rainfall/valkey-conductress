@@ -7,6 +7,7 @@ moment a second task needs it.
 """
 
 import json
+from typing import Optional
 
 from conductress.config import CACHECANNON_BINARY
 
@@ -103,6 +104,139 @@ def parse_json_results(output: str) -> dict:
         "responses": result_obj.get("responses"),
         "errors": result_obj.get("errors"),
         "duration_secs": result_obj.get("duration_secs"),
+    }
+
+
+def expand_cpu_list(spec: str) -> list[int]:
+    """Expand a taskset-style cpulist ('8-11,20') into an ordered list of CPU ids."""
+    cpus: list[int] = []
+    for part in spec.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if "-" in part:
+            lo, hi = part.split("-", 1)
+            cpus.extend(range(int(lo), int(hi) + 1))
+        else:
+            cpus.append(int(part))
+    return cpus
+
+
+def compact_cpu_list(cpus: list[int]) -> str:
+    """Inverse of expand_cpu_list: [8,9,10,12] -> '8-10,12'."""
+    if not cpus:
+        return ""
+    cpus = sorted(cpus)
+    runs: list[str] = []
+    start = prev = cpus[0]
+    for c in cpus[1:]:
+        if c == prev + 1:
+            prev = c
+            continue
+        runs.append(f"{start}-{prev}" if prev > start else f"{start}")
+        start = prev = c
+    runs.append(f"{start}-{prev}" if prev > start else f"{start}")
+    return ",".join(runs)
+
+
+def split_generator(processes: int, connections: int, threads: int, cpu_list: str) -> list[dict]:
+    """Divide one generator's budget across ``processes`` cachecannon processes.
+
+    One cachecannon process walls at roughly 22-25M ops/s regardless of its
+    thread or connection count (measured 2026-10-22 on a c8gn.48xlarge against
+    a server that was not the limit: 1 process 22M, 2 processes 48.7M, 4
+    processes 95.6M). Several processes on one host scale almost linearly, so
+    a cell that must drive past that wall asks for ``processes`` > 1 and the
+    task launches them concurrently against the same server.
+
+    Connections and threads are divided evenly (the remainder goes to the first
+    processes so the totals are preserved exactly). The CPU list, when given, is
+    cut into disjoint contiguous slices so the processes never share a core;
+    with no CPU list every process gets "" and the OS schedules.
+
+    Returns one dict per process: {connections, threads, cpu_list}.
+    """
+    if processes < 1:
+        raise ValueError(f"processes must be >= 1, got {processes}")
+    if connections < processes:
+        raise ValueError(f"connections ({connections}) must be >= processes ({processes})")
+    if threads < processes:
+        raise ValueError(f"threads ({threads}) must be >= processes ({processes})")
+    cpus = expand_cpu_list(cpu_list) if cpu_list else []
+    if cpus and len(cpus) < processes:
+        raise ValueError(f"cpu_list has {len(cpus)} cpus, fewer than processes ({processes})")
+    out: list[dict] = []
+    for i in range(processes):
+        conns = connections // processes + (1 if i < connections % processes else 0)
+        thr = threads // processes + (1 if i < threads % processes else 0)
+        if cpus:
+            per = len(cpus) // processes
+            extra = len(cpus) % processes
+            lo = i * per + min(i, extra)
+            hi = lo + per + (1 if i < extra else 0)
+            slice_spec = compact_cpu_list(cpus[lo:hi])
+        else:
+            slice_spec = ""
+        out.append({"connections": conns, "threads": thr, "cpu_list": slice_spec})
+    return out
+
+
+def merge_parsed_results(parts: list[dict]) -> dict:
+    """Combine the parse_json_results() dicts of N concurrent processes into one.
+
+    Throughput, requests, responses, errors, hits and misses are sums (the
+    processes ran over the same scored window against the same server).
+    error_pct is the worst process. The hit-rate percentage is recomputed from
+    the summed hits/misses. Latency percentiles cannot be merged exactly from
+    per-process percentiles, so the recorded latency block is the process with
+    the highest p99 (the pessimistic view) and carries ``merged_from`` with the
+    per-process p50/p99 so nothing is hidden. duration_secs is the max.
+    """
+    if not parts:
+        raise ValueError("merge_parsed_results needs at least one result")
+    if len(parts) == 1:
+        return parts[0]
+
+    def _sum(key: str) -> Optional[float]:
+        vals = [p.get(key) for p in parts]
+        if any(v is None for v in vals):
+            return None
+        return float(sum(vals))
+
+    hits = sum(float(p["hit_rate"]["hits"]) for p in parts)
+    misses = sum(float(p["hit_rate"]["misses"]) for p in parts)
+    total = hits + misses
+    hit_pct = (hits / total * 100.0) if total > 0 else 0.0
+
+    def _pick(key: str) -> Optional[dict]:
+        blocks = [p.get(key) for p in parts if p.get(key)]
+        if not blocks:
+            return None
+        worst = max(blocks, key=lambda b: b["p99_ms"])
+        merged = dict(worst)
+        merged["count"] = sum(int(b.get("count", 0)) for b in blocks)
+        merged["merged_from"] = [{"p50_ms": b["p50_ms"], "p99_ms": b["p99_ms"]} for b in blocks]
+        return merged
+
+    latency_get = _pick("latency_get")
+    latency_set = _pick("latency_set")
+    primary = latency_get
+    if latency_set and (latency_get is None or latency_set["count"] > latency_get["count"]):
+        primary = latency_set
+
+    return {
+        "throughput_rps": float(sum(p["throughput_rps"] for p in parts)),
+        "error_pct": float(max(p["error_pct"] for p in parts)),
+        "hit_rate": {"percent": hit_pct, "hits": hits, "misses": misses},
+        "latency": primary,
+        "latency_get": latency_get,
+        "latency_set": latency_set,
+        "requests": _sum("requests"),
+        "responses": _sum("responses"),
+        "errors": _sum("errors"),
+        "duration_secs": max((p.get("duration_secs") or 0) for p in parts) or None,
+        "processes": len(parts),
+        "per_process_rps": [float(p["throughput_rps"]) for p in parts],
     }
 
 
