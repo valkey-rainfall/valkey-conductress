@@ -321,12 +321,12 @@ class PerfTaskRunner(BaseTaskRunner):
         # Dante's regression-list shapes (2026-10-22): 10 distinct random keys per
         # command, streams, and lists. MGET/MSET each __rand_int__ occurrence is an
         # independent value, so the 10 keys are 10 distinct random keys.
-        "mget10": Test(name="mget10", preload_command="-t set", test_command="-t get"),
-        "mset10": Test(name="mset10", preload_command="-t set", test_command="-t set"),
-        "lpush": Test(name="lpush", preload_command="-t lpush", test_command="-t lpush"),
-        "lrange": Test(name="lrange", preload_command="-t lpush", test_command="-t lrange_100"),
-        "xadd": Test(name="xadd", preload_command="-t xadd", test_command="-t xadd"),
-        "xrange": Test(name="xrange", preload_command="-t xadd", test_command="-t xadd"),
+        "mget10": Test(name="mget10", preload_command="-t set", test_command=" -- MGET key:__rand_int__ key:__rand_int__ key:__rand_int__ key:__rand_int__ key:__rand_int__ key:__rand_int__ key:__rand_int__ key:__rand_int__ key:__rand_int__ key:__rand_int__"),
+        "mset10": Test(name="mset10", preload_command="-t set", test_command=" -- MSET key:__rand_int__ __rand_field__ key:__rand_int__ __rand_field__ key:__rand_int__ __rand_field__ key:__rand_int__ __rand_field__ key:__rand_int__ __rand_field__ key:__rand_int__ __rand_field__ key:__rand_int__ __rand_field__ key:__rand_int__ __rand_field__ key:__rand_int__ __rand_field__ key:__rand_int__ __rand_field__"),
+        "lpush": Test(name="lpush", preload_command=" -- LPUSH key:__rand_int__ __rand_field__", test_command=" -- LPUSH key:__rand_int__ __rand_field__"),
+        "lrange": Test(name="lrange", preload_command=" -- LPUSH key:__rand_int__ __rand_field__", test_command=" -- LRANGE key:__rand_int__ 0 99"),
+        "xadd": Test(name="xadd", preload_command=" -- XADD key:__rand_int__ MAXLEN ~ 1000 * f __rand_field__", test_command=" -- XADD key:__rand_int__ MAXLEN ~ 1000 * f __rand_field__"),
+        "xrange": Test(name="xrange", preload_command=" -- XADD key:__rand_int__ MAXLEN ~ 1000 * f __rand_field__", test_command=" -- XRANGE key:__rand_int__ - + COUNT 100"),
     }
 
     def __init__(
