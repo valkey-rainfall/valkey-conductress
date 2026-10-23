@@ -765,9 +765,17 @@ class Server:
         # clean up any rdb files from replication or snapshotting
         # valkey will automatically load "dump.rdb" if it is present in its working dir
         rdb_dirs = f"{Server.path_root}/*.rdb {config.PROJECT_ROOT}/*.rdb"
+        # The same applies to the append-only directory: a cell started with
+        # --appendonly yes loads whatever ~/appendonlydir holds, so without this
+        # every AOF cell inherits the previous AOF cell's dataset and append log
+        # (observed 2026-10-21 on g4bench: a 1.2 GB directory left by one cell
+        # made the next one spend >15 s in LOADING and fail the readiness probe).
+        aof_dirs = f"{Server.path_root}/appendonlydir {config.PROJECT_ROOT}/appendonlydir"
         if self.instance_dir is not None:
             rdb_dirs += f" {self.instance_dir}/*.rdb"
+            aof_dirs += f" {self.instance_dir}/appendonlydir"
         await self.run_host_command(f"rm -f {rdb_dirs}", check=False)
+        await self.run_host_command(f"rm -rf {aof_dirs}", check=False)
         # clean up any files created by profiling or other metric collection
         await self._profiling.cleanup()
 
