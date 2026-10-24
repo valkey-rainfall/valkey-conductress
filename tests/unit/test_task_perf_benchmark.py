@@ -261,6 +261,25 @@ class TestBatchedLookupRecipes:
             assert tc.startswith(f" -- {cmd} mygeo ")
             assert tc.count("element:__rand_int__") == 8
 
+    def test_multikey_recipes_use_ten_distinct_random_keys(self):
+        """mget10/mset10 name ten keys per command; each __rand_int__ is an
+        independent draw, so the ten keys are distinct. Both preload with SET."""
+        mget10, mset10 = PerfTaskRunner.tests["mget10"], PerfTaskRunner.tests["mset10"]
+        assert mget10.preload_command == "-t set" and mset10.preload_command == "-t set"
+        assert mget10.test_command.startswith(" -- MGET ")
+        assert mget10.test_command.count("key:__rand_int__") == 10
+        assert mset10.test_command.startswith(" -- MSET ")
+        assert mset10.test_command.count("key:__rand_int__ __rand_field__") == 10
+
+    def test_list_and_stream_recipes_preload_with_their_own_writer(self):
+        """LRANGE and XRANGE read what LPUSH and XADD wrote, on the same random keys."""
+        tests = PerfTaskRunner.tests
+        assert tests["lrange"].preload_command == tests["lpush"].test_command
+        assert tests["lrange"].test_command == " -- LRANGE key:__rand_int__ 0 99"
+        assert tests["xrange"].preload_command == tests["xadd"].test_command
+        assert tests["xadd"].test_command.startswith(" -- XADD key:__rand_int__ MAXLEN ~ 1000 *")
+        assert tests["xrange"].test_command == " -- XRANGE key:__rand_int__ - + COUNT 100"
+
     @pytest.mark.parametrize("name", ["httl1", "httl8", "geohash1", "geohash8", "geopos8"])
     def test_padded_key_variants_exist(self, name):
         """Every recipe has a padded-key form so --key-sizes does not KeyError."""
