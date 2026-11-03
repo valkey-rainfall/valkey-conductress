@@ -51,7 +51,7 @@ Every command supports `--json` for a versioned machine contract:
 conductress fleet status --json
 ```
 
-`fleet list` shows runner IDs, canonical platforms, aliases, and enabled state. `fleet status` adds queued/active task counts and status age. `fleet show` displays one runner in detail.
+`fleet list` shows runner IDs, canonical platforms, aliases, and enabled state. `fleet status` adds queued/active task counts and status age. `fleet show` displays one runner in detail, including the runner's last control-plane error (`Last error:`) and the last outcome it could not deliver in full (`Last outcome: <stage> for <task> at <time>: <reason>`; see `control-service.md`, "Outcome size"). The same fields are `fleet_control.last_error` and `fleet_control.last_outcome_downgrade` in the `--json` output.
 
 ## Remote task management
 

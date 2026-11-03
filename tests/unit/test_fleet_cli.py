@@ -288,3 +288,29 @@ def test_partial_remote_batch_failure_reports_submitted_ids(capsys):
     assert document["details"]["runner_id"] == "armbench"
     assert len(document["details"]["submitted"]) == 1
     assert document["details"]["submitted"][0]["task_id"] in document["message"]
+
+
+def test_fleet_show_prints_the_last_outcome_downgrade(capsys):
+    client = FakeClient()
+    runner = client.fleet()["runners"][0]
+    runner["status"] = {
+        "current_task": None,
+        "fleet_control": {
+            "last_error": None,
+            "last_outcome_downgrade": {
+                "task_id": "2026.10.31_01.51.19.863762",
+                "stage": "reduced",
+                "reason": "rejected: HTTP_413 (HTTP 413), 183943 bytes",
+                "dropped": ["result.data.per_rep_results[0].series (7647 bytes)"],
+                "original_bytes": 183943,
+                "sent_bytes": 16765,
+                "at": "2026-10-31T03:30:00Z",
+            },
+        },
+    }
+    client.runner = lambda runner_id: {"schema_version": 1, "runner": runner}
+
+    assert main(["fleet", "show", "armbench"], client=client) == 0
+    out = capsys.readouterr().out
+    assert "Last outcome: reduced for 2026.10.31_01.51.19.863762 at 2026-10-31T03:30:00Z: rejected: HTTP_413" in out
+    assert "Last error:" not in out

@@ -74,6 +74,10 @@ At restart:
 - pending outcomes are replayed idempotently;
 - missing accepted work without a result is treated as a blocking recovery error.
 
+### Outcome size and rejected outcomes
+
+While the journal holds an undelivered outcome the runner claims no new remote task, so an outcome the control service can never accept would block the runner for good. The mailbox therefore measures each outcome before the first send and trims it to `max_outcome_bytes` (default 3 MiB, env `CONDUCTRESS_MAX_OUTCOME_BYTES`), and it never retries the same bytes after a permanent rejection (HTTP 413, 400, 422). It steps down instead: full outcome, then a reduced outcome (bulk result keys dropped), then a `state: failed` report whose error starts with `outcome_rejected:` and names the local file that keeps the full result, then (if even that is refused) the journal is cleared. Each step is persisted in the journal entry (`rejections`) before it is sent, so a restart resumes at the same step. Transient errors keep today's retry-at-next-boundary behaviour. The full row is never removed from `results/output.jsonl`. Details and the shape of a downgraded record: `control-service.md`, "Outcome size".
+
 ## Status publication
 
 Runners publish status only between jobs and while idle; there is no periodic
@@ -107,6 +111,7 @@ Each static host status document gains additive fields:
 - last poll result;
 - accepted task and active journal stage;
 - pending outcome count;
+- the client outcome budget (`max_outcome_bytes`) and the last outcome downgrade (`last_outcome_downgrade`: task, stage `trimmed`/`reduced`/`failed`/`dropped`, reason, what was dropped, sizes, time);
 - imported task count and latest imported task;
 - boundary state/task/timestamp;
 - boundary publisher status and status-timer migration warning.

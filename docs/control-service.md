@@ -188,6 +188,43 @@ At completion a runner pushes the full result record, not a truncated summary. T
 
 The record keeps every scalar and aggregate, the peak-memory scalars, and the categorized jemalloc `breakdown`. It drops only the unbounded stack arrays: the jemalloc per-frame `raw_stacks` and the collapsed CPU flamegraph stacks (`cpu_stacks_main`, `cpu_stacks_io`). The full stacks remain on the runner and in the runner-published artifacts.
 
+## Outcome size
+
+One request body limit applies on the whole path from the runner to the database, and every part of the deployment must agree on it:
+
+| Where | Setting | Default |
+|---|---|---|
+| Control service (app) | `MAX_BODY_BYTES` env, `ControlConfig.max_body_bytes` | 4 MiB (`DEFAULT_MAX_BODY_BYTES`) |
+| nginx in front of it | `client_max_body_size` in `deploy/control-service/nginx-control.conf.example` | `4m`; MUST be >= `MAX_BODY_BYTES` |
+| Runner (client) | `CONDUCTRESS_MAX_OUTCOME_BYTES` env, `RunnerMailbox(max_outcome_bytes=...)` | 3 MiB (`outcome_size.DEFAULT_MAX_OUTCOME_BYTES`), below the server default |
+
+`GET /api/v1/health` (operator token) returns the app's deployed value as `limits.max_body_bytes`, so it can be checked against the nginx value. A body over the app limit gets `413 BODY_TOO_LARGE`. When nginx is the lower limit it answers 413 itself with no JSON body, and the runner reports `HTTP_413` instead of `BODY_TOO_LARGE`: that difference says which of the two limits was hit.
+
+A completed task's outcome is the largest body a runner sends. The runner measures it as it will go on the wire (compact JSON, no extra whitespace) and, when it is over `max_outcome_bytes`, trims it before the first send. Trimming removes bulk, optional values, biggest first, until the outcome fits: the result keys `series` (the replica-read per-rep INFO series), `samples` (memory series), `lscpu`, `reader_toml`, `writer_toml`, `toml_config` and `sample_errors`, at any depth of the result. Scores, per-rep aggregates, verdicts, lag statistics, memory scalars and the jemalloc `breakdown` are never dropped. A scalar that shares a bulk name (`bottleneck.samples` is a count) is kept.
+
+The control service never retries the same bytes after a permanent rejection (HTTP 413, 400 or 422). The runner steps down instead, each step sent at once:
+
+1. the full outcome is refused: the runner sends a reduced outcome, with every bulk key dropped;
+2. the reduced outcome is refused: the runner reports `state: failed` with an error such as `outcome_rejected: HTTP_413 (HTTP 413), 196565 bytes; full result kept at /home/<user>/conductress/results/output.jsonl`;
+3. that failure report is refused too: the runner clears its journal and keeps only a downgrade record.
+
+Transient errors (5xx, unreachable, token or control-plane state problems such as 401/403/404/409) keep the outcome in the journal and retry at the next boundary, as before. The full result row always stays on the runner in `results/output.jsonl` (or `failed_tasks.jsonl`), whatever was sent.
+
+A trimmed or reduced outcome carries an `outcome_delivery` object on the result:
+
+```json
+"outcome_delivery": {
+  "trimmed": true,
+  "reason": "rejected: HTTP_413 (HTTP 413), 183943 bytes",
+  "dropped": ["result.data.per_rep_results[3].series (7649 bytes)", "..."],
+  "original_bytes": 183943,
+  "sent_bytes": 16765,
+  "full_result_path": "/home/ec2-user/conductress/results/output.jsonl"
+}
+```
+
+`reason` starts with `preflight:` when the client budget trimmed it and `rejected:` when the server did. The runner also keeps the last downgrade in its status as `fleet_control.last_outcome_downgrade` (`stage` is `trimmed`, `reduced`, `failed` or `dropped`), shown by `conductress fleet status --json` and as a `Last outcome:` line in `conductress fleet show <runner>`.
+
 ## Persistence and backup
 
 SQLite uses WAL mode, foreign keys, explicit `BEGIN IMMEDIATE` claim transactions, and a five-second busy timeout. Back up with SQLite's online backup command rather than copying only the main file while WAL files are active:
