@@ -681,9 +681,14 @@ async def test_judge_passes_replica_identity_and_placement_into_the_verdict(fake
     }
     assert captured["window_start"] == 1007.0  # reader start + warmup
     assert row["lag"]["max_bytes"] == 200 and row["bottleneck"]["verdict"] == cs.VERDICT_SERVER
-    # Stored samples keep the INFO series but drop the raw cumulative counters.
-    assert all("cores" not in s and "threads" not in s for s in row["samples"])
-    assert row["samples"][0]["instances"][6379]["master_repl_offset"] == 500
+    # The stored series keeps the INFO fields as one list per field and drops
+    # the raw cumulative counters; "samples" (one dict per tick) is gone.
+    assert "samples" not in row
+    series = row["series"]
+    assert series["count"] == 2 and series["t"] == [100.0, 101.0]
+    assert series["instances"][6379]["master_repl_offset"] == [500, 900]
+    assert series["instances"][6380]["master_repl_offset"] == [300, 850]
+    assert "cores" not in series and "threads" not in series
 
 
 def test_judge_applies_guards_before_computing_anything(faked):
@@ -883,7 +888,7 @@ async def test_search_run_climbs_bisects_and_scores_the_knee(faked):
     assert [p["target_rps"] for p in probes] == rates
     assert [p["passed"] for p in probes][:3] == [True, True, False]
     assert all(p["reason"] == "" for p in probes if p["passed"])
-    assert all("samples" in p and "bottleneck" in p and "lag" in p for p in probes)
+    assert all("series" in p and "bottleneck" in p and "lag" in p for p in probes)
     summary = results.data["read_rate_search"]
     assert summary["per_rep_knee_target_rps"] == [knee["knee_target_rps"]]
     assert summary["per_rep_bounded_by"] == ["reader"] and summary["per_rep_probes"] == [len(rates)]
