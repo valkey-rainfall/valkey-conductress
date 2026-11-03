@@ -13,6 +13,18 @@ async def test_api_requires_authentication(api_client):
 
 
 @pytest.mark.asyncio
+async def test_health_reports_the_deployed_body_limit(api_client, auth_headers, control_env):
+    response = await api_client.get("/api/v1/health", headers=auth_headers["operator"])
+    assert response.status == 200
+    document = await response.json()
+    assert document["status"] == "ok"
+    assert document["limits"] == {"max_body_bytes": control_env["config"].max_body_bytes}
+    # Runner tokens cannot read it; the limit is an operator's concern.
+    response = await api_client.get("/api/v1/health", headers=auth_headers["arm"])
+    assert response.status == 403
+
+
+@pytest.mark.asyncio
 async def test_public_dashboard_feed_is_get_only_and_sanitized(api_client, auth_headers):
     envelope = task_envelope()
     envelope["task"]["note"] = "visible description"

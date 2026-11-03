@@ -23,3 +23,15 @@ def test_hash_token_reads_secret_without_command_line(monkeypatch, capsys):
         main()
 
     assert capsys.readouterr().out.strip() == ("2bb80d537b1da3e38bd30361aa855686bde0eacd7162fef6a25fe97bf527a25b")
+
+
+def test_body_limit_default_is_four_mib_and_env_overrides(monkeypatch, tmp_path):
+    from conductress.control.config import DEFAULT_MAX_BODY_BYTES, ControlConfig
+
+    for name in ("MAX_BODY_BYTES", "PUBLISHED_TASKS_DIR"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("CONTROL_DB_PATH", str(tmp_path / "control.db"))
+    assert DEFAULT_MAX_BODY_BYTES == 4 * 1024 * 1024
+    assert ControlConfig.from_env().max_body_bytes == DEFAULT_MAX_BODY_BYTES
+    monkeypatch.setenv("MAX_BODY_BYTES", "65536")
+    assert ControlConfig.from_env().max_body_bytes == 65536

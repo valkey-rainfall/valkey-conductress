@@ -7,6 +7,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
+# Largest request body the app accepts (``MAX_BODY_BYTES``). The reverse proxy
+# in front of the app must allow at least this much (nginx
+# ``client_max_body_size``, see deploy/control-service/nginx-control.conf.example),
+# or it answers 413 itself with no JSON body and the runner cannot tell the
+# limit from a proxy fault. Runners trim outcomes to stay below this value
+# (outcome_size.DEFAULT_MAX_OUTCOME_BYTES, 3 MiB).
+DEFAULT_MAX_BODY_BYTES = 4 * 1024 * 1024
+
 
 @dataclass(frozen=True)
 class ControlConfig:
@@ -22,7 +30,7 @@ class ControlConfig:
     github_verification_enabled: bool = False
     canary_profiles_dir: Path = Path(__file__).resolve().parent.parent / "canary_profiles"
     claim_lease_seconds: int = 300
-    max_body_bytes: int = 1024 * 1024
+    max_body_bytes: int = DEFAULT_MAX_BODY_BYTES
 
     @classmethod
     def from_env(cls) -> "ControlConfig":
@@ -45,7 +53,7 @@ class ControlConfig:
             github_verification_enabled=verification,
             canary_profiles_dir=Path(os.environ.get("CANARY_PROFILES_DIR", str(default_profiles))),
             claim_lease_seconds=int(os.environ.get("CLAIM_LEASE_SECONDS", "300")),
-            max_body_bytes=int(os.environ.get("MAX_BODY_BYTES", str(1024 * 1024))),
+            max_body_bytes=int(os.environ.get("MAX_BODY_BYTES", str(DEFAULT_MAX_BODY_BYTES))),
         )
 
     def validate(self) -> None:

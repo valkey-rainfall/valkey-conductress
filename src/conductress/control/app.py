@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 SERVICE_KEY = web.AppKey("service", ControlService)
 TOKEN_STORE_KEY = web.AppKey("token_store", TokenStore)
 SCHEDULER_KEY = web.AppKey("scheduler", CanaryScheduler)
+MAX_BODY_BYTES_KEY = web.AppKey("max_body_bytes", int)
 PUBLIC_DASHBOARD_PATH = "/api/v1/public/dashboard"
 
 
@@ -198,6 +199,7 @@ def create_app(
     app[SERVICE_KEY] = service
     app[TOKEN_STORE_KEY] = token_store
     app[SCHEDULER_KEY] = scheduler
+    app[MAX_BODY_BYTES_KEY] = config.max_body_bytes
 
     app.router.add_get(PUBLIC_DASHBOARD_PATH, _public_dashboard)
     app.router.add_options(PUBLIC_DASHBOARD_PATH, _public_dashboard_options)
@@ -256,7 +258,9 @@ async def _public_dashboard_options(_request: web.Request) -> web.Response:
 
 async def _health(request: web.Request) -> web.Response:
     _require_operator(request)
-    return _response(status="ok")
+    # The deployed body limit, so an operator can check it against the
+    # reverse proxy's client_max_body_size without reading the unit file.
+    return _response(status="ok", limits={"max_body_bytes": request.app[MAX_BODY_BYTES_KEY]})
 
 
 async def _submit_task(request: web.Request) -> web.Response:
