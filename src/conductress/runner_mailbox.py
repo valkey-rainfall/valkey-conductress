@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -10,17 +12,48 @@ from typing import Any, Callable, Optional
 from .config import CONDUCTRESS_FAILED_LOG, CONDUCTRESS_OUTPUT
 from .delivery_journal import DeliveryJournal
 from .fleet_client import FleetClient, FleetClientError
+from .outcome_size import DEFAULT_MAX_OUTCOME_BYTES, is_permanent_rejection, trim_outcome, wire_bytes
 from .runner_identity import get_runner_config
 from .tail_reader import find_record_by_task_id
 from .task_queue import BaseTaskData, TaskQueue
+
+logger = logging.getLogger(__name__)
+
+# Environment override for the client-side outcome budget (bytes).
+MAX_OUTCOME_BYTES_ENV = "CONDUCTRESS_MAX_OUTCOME_BYTES"
+
+# Error prefix of an outcome downgraded to ``failed`` because the control
+# service refused the real outcome. Also what tells the ladder that the
+# failed report itself was the last step.
+OUTCOME_REJECTED_PREFIX = "outcome_rejected:"
 
 
 def _utc_text() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+def _max_outcome_bytes_from_env() -> int:
+    raw = os.environ.get(MAX_OUTCOME_BYTES_ENV)
+    if not raw:
+        return DEFAULT_MAX_OUTCOME_BYTES
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ValueError(f"{MAX_OUTCOME_BYTES_ENV} must be an integer number of bytes") from exc
+    if value < 1024:
+        raise ValueError(f"{MAX_OUTCOME_BYTES_ENV} must be at least 1024")
+    return value
+
+
 class RunnerMailbox:
-    """Own at most one remotely accepted task; never contacts control during execution."""
+    """Own at most one remotely accepted task; never contacts control during execution.
+
+    Outcome size: an outcome is measured before it is sent and trimmed to
+    ``max_outcome_bytes`` (bulk result keys dropped, biggest first). A
+    permanent rejection by the control service (HTTP 413, 400, 422) is never
+    retried with the same bytes; see :meth:`flush_pending_outcome` for the
+    ladder. The full result row always stays on disk.
+    """
 
     def __init__(
         self,
@@ -28,6 +61,7 @@ class RunnerMailbox:
         *,
         mode: str = "off",
         client_factory: Callable[[], FleetClient] = FleetClient.from_runner_env,
+        max_outcome_bytes: Optional[int] = None,
     ):
         if mode not in {"off", "shadow", "live"}:
             raise ValueError(f"invalid fleet mode: {mode}")
@@ -35,6 +69,9 @@ class RunnerMailbox:
         self.runner_id = get_runner_config().runner_id
         self.journal = DeliveryJournal(journal_path)
         self._client_factory = client_factory
+        self.max_outcome_bytes = max_outcome_bytes if max_outcome_bytes is not None else _max_outcome_bytes_from_env()
+        if self.max_outcome_bytes < 1024:
+            raise ValueError("max_outcome_bytes must be at least 1024")
 
     @property
     def enabled(self) -> bool:
@@ -231,7 +268,53 @@ class RunnerMailbox:
             "result": summary,
             "error": None,
         }
-        self.journal.update_active(stage="outcome_pending", outcome=outcome)
+        outcome = self._preflight_size(outcome)
+        self.journal.update_active(stage="outcome_pending", outcome=outcome, rejections=[])
+
+    def _preflight_size(self, outcome: dict[str, Any]) -> dict[str, Any]:
+        """Trim an outcome that would exceed the client-side budget before the first send."""
+        size = wire_bytes(outcome)
+        if size <= self.max_outcome_bytes:
+            return outcome
+        reason = f"preflight: {size} bytes over max_outcome_bytes {self.max_outcome_bytes}"
+        trimmed, dropped = trim_outcome(
+            outcome, self.max_outcome_bytes, reason=reason, full_record_path=str(CONDUCTRESS_OUTPUT)
+        )
+        if not dropped:
+            logger.warning(
+                "outcome for %s is %d bytes (budget %d) and has nothing to trim; sending as is",
+                outcome["task_id"],
+                size,
+                self.max_outcome_bytes,
+            )
+            return outcome
+        self._record_downgrade(outcome["task_id"], "trimmed", reason, dropped, size, wire_bytes(trimmed))
+        return trimmed
+
+    def _record_downgrade(
+        self, task_id: str, stage: str, reason: str, dropped: list[str], original_bytes: int, sent_bytes: Optional[int]
+    ) -> None:
+        """Log and persist why an outcome was not delivered in full (shown by ``fleet status``)."""
+        logger.warning(
+            "outcome for %s downgraded (%s): %s; dropped %s; %d -> %s bytes",
+            task_id,
+            stage,
+            reason,
+            ", ".join(dropped) if dropped else "nothing",
+            original_bytes,
+            sent_bytes if sent_bytes is not None else "none",
+        )
+        self.journal.update_stats(
+            last_outcome_downgrade={
+                "task_id": task_id,
+                "stage": stage,
+                "reason": reason,
+                "dropped": list(dropped),
+                "original_bytes": original_bytes,
+                "sent_bytes": sent_bytes,
+                "at": _utc_text(),
+            }
+        )
 
     def stage_failure(self, task: BaseTaskData, error: str) -> None:
         self._require_active(task.task_id)
@@ -269,15 +352,82 @@ class RunnerMailbox:
         self.flush_pending_outcome()
 
     def flush_pending_outcome(self) -> bool:
-        active = self.journal.active
-        if active is None or active["stage"] != "outcome_pending":
+        """Deliver the staged outcome. True when nothing is pending afterwards.
+
+        A transient error (5xx, unreachable, auth, control-plane state) keeps
+        the outcome in the journal for the next boundary, as before. A
+        permanent rejection of the payload (HTTP 413, 400, 422) can never
+        succeed with the same bytes, so it steps down a ladder instead of
+        wedging the runner, each step sent at once:
+
+        1. full outcome -> rejected -> reduced outcome (every bulk result key
+           dropped, ``outcome_delivery`` says what and where the full row is);
+        2. reduced outcome -> rejected -> ``state: failed`` with an
+           ``outcome_rejected:`` error naming the code, the size and the local
+           file that keeps the full result;
+        3. that failure report -> rejected -> journal cleared, the downgrade
+           record is the only trace.
+
+        Each step is persisted before it is sent, so a restart resumes at the
+        same step. The full result row stays on disk at every step.
+        """
+        while True:
+            active = self.journal.active
+            if active is None or active["stage"] != "outcome_pending":
+                return True
+            try:
+                self._contact(lambda client: client.report_outcome(active["task_id"], active["outcome"]))
+            except FleetClientError as exc:
+                if not is_permanent_rejection(exc.status):
+                    return False
+                self._downgrade_rejected_outcome(active, exc)
+                continue
+            self.journal.clear_active()
             return True
-        try:
-            self._contact(lambda client: client.report_outcome(active["task_id"], active["outcome"]))
-        except FleetClientError:
-            return False
+
+    def _downgrade_rejected_outcome(self, active: dict[str, Any], exc: FleetClientError) -> None:
+        """Re-stage the next ladder step for an outcome the control service refused."""
+        task_id = active["task_id"]
+        outcome = active["outcome"]
+        size = wire_bytes(outcome)
+        rejection = f"{exc.code} (HTTP {exc.status}), {size} bytes"
+        rejections = list(active.get("rejections") or []) + [
+            {"code": exc.code, "status": exc.status, "message": exc.message, "bytes": size, "at": _utc_text()}
+        ]
+        completed = outcome.get("state") == "completed"
+        record_path = str(CONDUCTRESS_OUTPUT if completed else CONDUCTRESS_FAILED_LOG)
+
+        if completed and len(rejections) == 1:
+            reduced, dropped = trim_outcome(outcome, 0, reason=f"rejected: {rejection}", full_record_path=record_path)
+            if dropped:
+                self._record_downgrade(task_id, "reduced", f"rejected: {rejection}", dropped, size, wire_bytes(reduced))
+                self.journal.update_active(outcome=reduced, rejections=rejections)
+                return
+
+        error = str(outcome.get("error") or "")
+        if completed or not error.startswith(OUTCOME_REJECTED_PREFIX):
+            message = f"{OUTCOME_REJECTED_PREFIX} {rejection}; full result kept at {record_path}"
+            if not completed:
+                message = f"{OUTCOME_REJECTED_PREFIX} {rejection}; original error: {error[:200]}; record kept at {record_path}"
+            failed = {
+                "schema_version": 1,
+                "task_id": task_id,
+                "runner_id": self.runner_id,
+                "state": "failed",
+                "completed_at": _utc_text(),
+                "result": None,
+                "error": message,
+            }
+            self._record_downgrade(task_id, "failed", message, [], size, wire_bytes(failed))
+            self.journal.update_active(outcome=failed, rejections=rejections)
+            return
+
+        # The failure report was refused as well. Nothing smaller exists;
+        # clear the slot so the runner can claim again. The row is on disk.
+        reason = f"dropped: {rejection}; record kept at {record_path}"
+        logger.error("outcome for %s could not be delivered in any form: %s", task_id, reason)
+        self._record_downgrade(task_id, "dropped", reason, [], size, None)
         self.journal.clear_active()
-        return True
 
     def push_status(self, status: dict[str, Any]) -> bool:
         if not self.enabled:
@@ -325,6 +475,10 @@ class RunnerMailbox:
             "delivery_journal_depth": 1 if active else 0,
             "imported_count_total": stats.get("imported_count_total", 0),
             "last_imported_task_id": stats.get("last_imported_task_id"),
+            "max_outcome_bytes": self.max_outcome_bytes,
+            # Why the last outcome was not delivered in full (trimmed, reduced,
+            # failed, dropped); None when every outcome went out whole.
+            "last_outcome_downgrade": stats.get("last_outcome_downgrade"),
         }
 
     def _require_active(self, task_id: str) -> dict[str, Any]:

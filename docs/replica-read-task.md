@@ -150,6 +150,18 @@ event-loop duty, reader/writer thread utilisation, and per-core softirq share
 on the replica's and reader's cores. Raw per-core and per-thread counters are
 not stored (they would add about 1 MB per rep on a 96-core host).
 
+Each rep's INFO series is stored under `series` in columnar form: `count`
+ticks, the sample clocks `t` and `t_local` (monotonic seconds, 3 decimals),
+and `instances.<port>.<field>` as one list of `count` values per INFO field,
+in tick order (`None` where an instance did not report the field on a tick).
+Stored one dict per tick, the same numbers were about 30 KB per rep, mostly
+repeated key names, and a five-rep row grew past 190 KB; columnar it is about
+8 KB per rep (65 KB per row on the real rows measured). With
+`--read-rate-search` every probe entry carries its own `series`. The series
+is a bulk key for outcome delivery: a runner drops it first when an outcome
+must be trimmed to fit the control service (see `control-service.md`,
+"Outcome size"); the full row on the runner keeps it.
+
 Lag resolution is bounded by sample skew times replication bytes per second;
 lags below that are noise and are clamped at zero.
 

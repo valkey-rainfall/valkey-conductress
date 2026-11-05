@@ -15,6 +15,8 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
 
+from .outcome_size import encode_json_body
+
 DEFAULT_CONTROL_URL = "https://data.conductress.rainsupreme.net/api/v1"
 CLIENT_SCHEMA_VERSION = 1
 
@@ -165,7 +167,8 @@ class FleetClient:
         }
         payload = None
         if body is not None:
-            payload = json.dumps(body, separators=(",", ":")).encode("utf-8")
+            # Compact encoding; outcome_size measures bodies the same way.
+            payload = encode_json_body(body)
             request_headers["Content-Type"] = "application/json"
         request = Request(url, data=payload, headers=request_headers, method=method)
         retryable = method in {"GET", "HEAD"} or (method in {"POST", "PUT"} and "Idempotency-Key" in request_headers)

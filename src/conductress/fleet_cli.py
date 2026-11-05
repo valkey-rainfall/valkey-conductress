@@ -175,6 +175,17 @@ def _fleet_show(client: FleetClient, args: argparse.Namespace) -> int:
     if runner.get("status"):
         current = runner["status"].get("current_task")
         print(f"Current task: {current.get('id') if current else '-'}")
+        fleet_control = runner["status"].get("fleet_control") or {}
+        if fleet_control.get("last_error"):
+            print(f"Last error:  {fleet_control['last_error']}")
+        downgrade = fleet_control.get("last_outcome_downgrade")
+        if downgrade:
+            # An outcome the runner could not deliver in full: trimmed before
+            # the send, reduced or failed after a rejection, or dropped.
+            print(
+                f"Last outcome: {downgrade.get('stage')} for {downgrade.get('task_id')} "
+                f"at {downgrade.get('at')}: {downgrade.get('reason')}"
+            )
     return 0
 
 

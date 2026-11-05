@@ -415,3 +415,240 @@ def test_cancel_requested_false_when_control_unreachable(tmp_path):
     client.task = unreachable
     # A transient control outage must not abort a running benchmark.
     assert mailbox.cancel_requested(task.task_id) is False
+
+
+# ------------------------------------------------------------- outcome size
+
+
+class RejectingClient(FakeRunnerClient):
+    """Refuses outcome reports with the given (status, code) answers, in order, then accepts."""
+
+    def __init__(self, answers):
+        super().__init__()
+        self.answers = list(answers)
+        self.attempts = []
+
+    def report_outcome(self, task_id, outcome):
+        self.attempts.append(json.loads(json.dumps(outcome)))
+        if self.answers:
+            status, code = self.answers.pop(0)
+            if status is None:
+                raise FleetClientError("CONTROL_UNREACHABLE", "offline", 3)
+            raise FleetClientError(code, "refused", 1, status)
+        return super().report_outcome(task_id, outcome)
+
+
+def _replica_read_row(task_id, reps=5, ticks=35):
+    series = {
+        "count": ticks,
+        "t": [1000.0 + i for i in range(ticks)],
+        "t_local": [1000.2 + i for i in range(ticks)],
+        "instances": {
+            "6379": {"master_repl_offset": [6000 * i for i in range(ticks)], "role": ["master"] * ticks},
+            "6380": {"master_repl_offset": [6000 * i - 300 for i in range(ticks)], "role": ["slave"] * ticks},
+        },
+    }
+    return {
+        "task_id": task_id,
+        "method": "replica-read",
+        "score": 4_230_000.0,
+        "runner_id": "armbench",
+        "data": {
+            "per_run_rps": [4.2e6] * reps,
+            "mean_rps": 4_230_000.0,
+            "bottleneck": {"verdict": "ambiguous", "valid": False},
+            "per_rep_results": [
+                {"reader_rps": 4.2e6, "lag": {"samples": 26, "mean_bytes": 10}, "series": dict(series)}
+                for _ in range(reps)
+            ],
+            "lscpu": "Architecture: aarch64\n" * 50,
+            "reader_toml": "[reader]\n" * 20,
+            "writer_toml": "[writer]\n" * 20,
+        },
+    }
+
+
+def _staged(tmp_path, client, **mailbox_kwargs):
+    mailbox = RunnerMailbox(tmp_path / "delivery.json", mode="live", client_factory=lambda: client, **mailbox_kwargs)
+    queue = TaskQueue(tmp_path / "queue")
+    task = mailbox.poll(queue)
+    mailbox.stage_success(task, result=_replica_read_row(task.task_id))
+    queue.finish_task(task)
+    return mailbox, task
+
+
+def test_max_outcome_bytes_defaults_below_server_limit_and_reads_env(tmp_path, monkeypatch):
+    from conductress.control.config import DEFAULT_MAX_BODY_BYTES
+    from conductress.outcome_size import DEFAULT_MAX_OUTCOME_BYTES
+
+    mailbox = make_mailbox(tmp_path, FakeRunnerClient())
+    assert mailbox.max_outcome_bytes == DEFAULT_MAX_OUTCOME_BYTES < DEFAULT_MAX_BODY_BYTES
+    assert mailbox.status()["max_outcome_bytes"] == DEFAULT_MAX_OUTCOME_BYTES
+
+    monkeypatch.setenv("CONDUCTRESS_MAX_OUTCOME_BYTES", "65536")
+    assert make_mailbox(tmp_path, FakeRunnerClient()).max_outcome_bytes == 65536
+    monkeypatch.setenv("CONDUCTRESS_MAX_OUTCOME_BYTES", "12")
+    with pytest.raises(ValueError, match="at least 1024"):
+        make_mailbox(tmp_path, FakeRunnerClient())
+    monkeypatch.setenv("CONDUCTRESS_MAX_OUTCOME_BYTES", "lots")
+    with pytest.raises(ValueError, match="integer"):
+        make_mailbox(tmp_path, FakeRunnerClient())
+
+
+def test_preflight_trims_an_oversized_outcome_to_the_budget(tmp_path):
+    from conductress.outcome_size import wire_bytes
+
+    client = RejectingClient([])
+    mailbox, task = _staged(tmp_path, client, max_outcome_bytes=4096)
+
+    staged = mailbox.journal.active["outcome"]
+    assert wire_bytes(staged) <= 4096
+    record = staged["result"]["outcome_delivery"]
+    assert record["trimmed"] is True and record["reason"].startswith("preflight: ")
+    assert record["original_bytes"] > 4096 >= record["sent_bytes"]
+    assert record["full_result_path"].endswith("output.jsonl")
+    assert record["dropped"] and all("series" in item for item in record["dropped"])
+    # Scalars and per-rep aggregates are kept.
+    data = staged["result"]["data"]
+    assert data["mean_rps"] == 4_230_000.0 and data["per_rep_results"][0]["lag"]["samples"] == 26
+    downgrade = mailbox.status()["last_outcome_downgrade"]
+    assert downgrade["task_id"] == task.task_id and downgrade["stage"] == "trimmed"
+
+    assert mailbox.flush_pending_outcome() is True
+    assert client.attempts[0] == staged and mailbox.journal.active is None
+
+
+def test_small_outcome_is_sent_whole_without_a_delivery_record(tmp_path):
+    client = RejectingClient([])
+    mailbox, _task = _staged(tmp_path, client)
+    assert mailbox.flush_pending_outcome() is True
+    sent = client.attempts[0]["result"]
+    assert "outcome_delivery" not in sent
+    assert all("series" in rep for rep in sent["data"]["per_rep_results"])
+    assert mailbox.status()["last_outcome_downgrade"] is None
+
+
+def test_413_sends_reduced_outcome_once_then_clears(tmp_path):
+    # nginx answers 413 without a JSON body: the client sees HTTP_413.
+    client = RejectingClient([(413, "HTTP_413")])
+    mailbox, task = _staged(tmp_path, client)
+
+    assert mailbox.flush_pending_outcome() is True
+    assert mailbox.journal.active is None
+    assert len(client.attempts) == 2
+    full, reduced = client.attempts
+    assert "outcome_delivery" not in full["result"]
+    assert reduced["state"] == "completed"
+    record = reduced["result"]["outcome_delivery"]
+    assert record["reason"].startswith("rejected: HTTP_413 (HTTP 413), ")
+    data = reduced["result"]["data"]
+    assert all("series" not in rep for rep in data["per_rep_results"])
+    assert "lscpu" not in data and "reader_toml" not in data
+    assert data["mean_rps"] == 4_230_000.0 and data["per_rep_results"][0]["reader_rps"] == 4.2e6
+    downgrade = mailbox.status()["last_outcome_downgrade"]
+    assert downgrade["stage"] == "reduced" and downgrade["task_id"] == task.task_id
+    assert downgrade["sent_bytes"] < downgrade["original_bytes"]
+    # Delivery succeeded, so the contact stats say reachable with no error.
+    assert mailbox.status()["last_error"] is None
+
+
+def test_reduced_outcome_rejected_again_reports_failed_with_pointer(tmp_path):
+    client = RejectingClient([(413, "BODY_TOO_LARGE"), (413, "BODY_TOO_LARGE")])
+    mailbox, task = _staged(tmp_path, client)
+
+    assert mailbox.flush_pending_outcome() is True
+    assert mailbox.journal.active is None
+    assert [a["state"] for a in client.attempts] == ["completed", "completed", "failed"]
+    failed = client.attempts[2]
+    assert failed["result"] is None
+    assert failed["error"].startswith("outcome_rejected: BODY_TOO_LARGE (HTTP 413), ")
+    assert "bytes; full result kept at " in failed["error"] and failed["error"].endswith("output.jsonl")
+    assert failed["task_id"] == task.task_id and failed["runner_id"] == "armbench"
+    assert mailbox.status()["last_outcome_downgrade"]["stage"] == "failed"
+    # Nothing was removed from the local result row.
+    assert mailbox.journal.active is None
+
+
+def test_failed_report_rejected_too_clears_the_journal(tmp_path):
+    client = RejectingClient([(400, "SCHEMA_INVALID"), (400, "SCHEMA_INVALID"), (400, "SCHEMA_INVALID")])
+    mailbox, task = _staged(tmp_path, client)
+
+    assert mailbox.flush_pending_outcome() is True
+    assert mailbox.journal.active is None
+    assert len(client.attempts) == 3 and client.outcomes == []
+    downgrade = mailbox.status()["last_outcome_downgrade"]
+    assert downgrade["stage"] == "dropped" and downgrade["task_id"] == task.task_id
+    assert downgrade["reason"].startswith("dropped: SCHEMA_INVALID (HTTP 400)")
+
+
+def test_transient_error_keeps_the_current_ladder_step_across_restart(tmp_path):
+    # 413 on the full outcome, then the control plane goes away while the
+    # reduced outcome is being sent: the reduced form waits in the journal.
+    client = RejectingClient([(413, "HTTP_413"), (None, None)])
+    mailbox, task = _staged(tmp_path, client)
+
+    assert mailbox.flush_pending_outcome() is False
+    active = mailbox.journal.active
+    assert active["stage"] == "outcome_pending"
+    assert len(active["rejections"]) == 1 and active["rejections"][0]["status"] == 413
+    assert "outcome_delivery" in active["outcome"]["result"]
+
+    restarted = RunnerMailbox(tmp_path / "delivery.json", mode="live", client_factory=lambda: client)
+    assert restarted.reconcile(TaskQueue(tmp_path / "queue")) is None
+    assert restarted.journal.active is None
+    assert len(client.attempts) == 3
+    assert client.attempts[2] == active["outcome"]  # the reduced form, not a new full send
+    assert client.outcomes[0][1]["state"] == "completed"
+
+
+def test_transient_and_state_errors_still_retry_forever(tmp_path):
+    for status, code in ((503, "HTTP_503"), (409, "OUTCOME_CONFLICT"), (404, "TASK_NOT_FOUND"), (401, "AUTH_INVALID")):
+        client = RejectingClient([(status, code)] * 3)
+        mailbox, _task = _staged(tmp_path / code, client)
+        assert mailbox.flush_pending_outcome() is False
+        assert mailbox.flush_pending_outcome() is False
+        assert mailbox.journal.active["stage"] == "outcome_pending"
+        assert all("outcome_delivery" not in a["result"] for a in client.attempts)
+        assert mailbox.status()["last_outcome_downgrade"] is None
+        assert mailbox.status()["last_error"] == f"{code}: refused"
+
+
+def test_stuck_journal_clears_itself_at_the_next_boundary(tmp_path):
+    # The live case: a runner holds one full outcome the proxy refused with
+    # 413 and retries it at every boundary. Whichever is deployed first fixes
+    # the wedge on its own; no journal is edited by hand.
+    # (a) nginx raised first: the retry of the full outcome is accepted.
+    accepted = RejectingClient([])
+    mailbox, task = _staged(tmp_path / "a", accepted)
+    restarted = RunnerMailbox(tmp_path / "a" / "delivery.json", mode="live", client_factory=lambda: accepted)
+    assert restarted.reconcile(TaskQueue(tmp_path / "a" / "queue")) is None
+    assert restarted.journal.active is None
+    assert "outcome_delivery" not in accepted.outcomes[0][1]["result"]
+    # (b) runner code first, proxy still at the old limit: one more 413 steps
+    # down to the reduced outcome, which the old limit accepts.
+    refusing = RejectingClient([(413, "HTTP_413")])
+    mailbox, task = _staged(tmp_path / "b", refusing)
+    restarted = RunnerMailbox(tmp_path / "b" / "delivery.json", mode="live", client_factory=lambda: refusing)
+    assert restarted.reconcile(TaskQueue(tmp_path / "b" / "queue")) is None
+    assert restarted.journal.active is None
+    delivered = refusing.outcomes[0][1]
+    assert delivered["task_id"] == task.task_id and delivered["state"] == "completed"
+    assert delivered["result"]["outcome_delivery"]["reason"].startswith("rejected: HTTP_413")
+
+
+def test_rejected_failure_report_is_downgraded_with_original_error(tmp_path):
+    client = RejectingClient([(413, "HTTP_413")])
+    mailbox = make_mailbox(tmp_path, client)
+    queue = TaskQueue(tmp_path / "queue")
+    task = mailbox.poll(queue)
+    mailbox.stage_failure(task, "Traceback: " + "x" * 5000)
+    queue.finish_task(task)
+
+    assert mailbox.flush_pending_outcome() is True
+    assert len(client.attempts) == 2
+    second = client.attempts[1]
+    assert second["state"] == "failed"
+    assert second["error"].startswith("outcome_rejected: HTTP_413 (HTTP 413), ")
+    assert "original error: Traceback: xxx" in second["error"]
+    assert second["error"].endswith("failed_tasks.jsonl") or "failed.jsonl" in second["error"]
+    assert mailbox.journal.active is None

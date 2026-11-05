@@ -845,7 +845,7 @@ class ReplicaReadTaskRunner(BaseTaskRunner):
             "writer_latency": m.writer["latency"],
             "lag": lag,
             "bottleneck": bottleneck,
-            "samples": self._slim_samples(m.samples),
+            "series": self._series(m.samples),
         }
 
     async def _search(self, group: TopologyGroup, rep: int, placement: "_Placement") -> tuple:
@@ -985,19 +985,56 @@ class ReplicaReadTaskRunner(BaseTaskRunner):
                 self.logger.warning("INFO sample failed: %s", exc)
             await asyncio.sleep(self.task.sample_interval)
 
-    @staticmethod
-    def _slim_samples(samples: list) -> list:
-        """Drop the cumulative counters from stored samples; the verdict already summarises them.
+    # Decimals kept on the sample clocks in the stored series. Samples are a
+    # second apart; a millisecond is far below the sampling skew.
+    _SERIES_CLOCK_DECIMALS = 3
 
-        Per-core and per-thread jiffies for a 96-core host at 1 Hz over a
-        60 s rep would add ~1 MB to the result row, and the host-wide thread
-        scan another ~3 MB; the INFO series (offsets, ops/sec, any extra INFO
-        fields) is what later analysis reads back. The verdict's
-        ``foreign_attribution`` keeps the part of the scan worth keeping.
+    @classmethod
+    def _series(cls, samples: list) -> dict:
+        """The INFO series of one measurement in columnar form, for the result row.
+
+        The in-memory samples (one dict per tick, every instance's fields
+        repeated under it) feed the lag statistics and the bottleneck verdict.
+        Stored as they are, 35 ticks x 2 instances x 15 fields cost about
+        30 KB per rep, mostly repeated key names; five reps made a 200 KB row
+        that the control service refused (HTTP 413). The row keeps the same
+        numbers as one list per field::
+
+            {"count": 35,
+             "t": [...], "t_local": [...],
+             "instances": {6379: {"master_repl_offset": [...], "role": [...], ...},
+                           6380: {...}}}
+
+        Every field list has ``count`` entries, in tick order; a field an
+        instance did not report on a tick is ``None`` there. The cumulative
+        per-core and per-thread counters (``cores``, ``threads``,
+        ``host_threads``, ``generators``) are not stored at all: on a 96-core
+        host at 1 Hz they would add about 1 MB per rep, and the verdict's
+        ``foreign_attribution`` already keeps the part worth keeping.
         """
-        return [
-            {k: v for k, v in s.items() if k not in ("cores", "threads", "generators", "host_threads")} for s in samples
-        ]
+        count = len(samples)
+        series: dict = {
+            "count": count,
+            "t": [cls._clock(s.get("t")) for s in samples],
+            "t_local": [cls._clock(s.get("t_local")) for s in samples],
+            "instances": {},
+        }
+        ports: list = []
+        for sample in samples:
+            for port in sample.get("instances") or {}:
+                if port not in ports:
+                    ports.append(port)
+        for port in ports:
+            fields: dict = {}
+            for index, sample in enumerate(samples):
+                for key, value in ((sample.get("instances") or {}).get(port) or {}).items():
+                    fields.setdefault(key, [None] * count)[index] = value
+            series["instances"][port] = fields
+        return series
+
+    @classmethod
+    def _clock(cls, value):
+        return round(value, cls._SERIES_CLOCK_DECIMALS) if isinstance(value, (int, float)) else None
 
     # ------------------------------------------------------------------ results
 

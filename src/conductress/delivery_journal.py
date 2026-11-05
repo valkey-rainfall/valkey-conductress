@@ -25,6 +25,7 @@ def _default_state() -> dict[str, Any]:
             "last_control_latency_ms": None,
             "control_reachable": None,
             "last_error": None,
+            "last_outcome_downgrade": None,
         },
     }
 
