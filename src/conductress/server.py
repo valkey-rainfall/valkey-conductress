@@ -3,7 +3,6 @@
 import asyncio
 import logging
 import shlex
-import time
 from collections import defaultdict
 from pathlib import Path
 from typing import Optional
@@ -596,6 +595,57 @@ class Server:
         await self.stop()
         await asyncio.sleep(1)  # short delay to it doesn't get our new server (TODO verify this)
 
+    # Valkey defaults for the persistence file names (``dbfilename``,
+    # ``appenddirname``); a task overrides them through its server args.
+    DEFAULT_DBFILENAME = "dump.rdb"
+    DEFAULT_APPENDDIRNAME = "appendonlydir"
+
+    @staticmethod
+    def _server_arg_value(server_args: str, name: str) -> Optional[str]:
+        """The value of ``--name value`` in raw server args, or None (last one wins, as in valkey)."""
+        if not server_args:
+            return None
+        tokens = shlex.split(server_args)
+        value = None
+        for index, token in enumerate(tokens[:-1]):
+            if token == f"--{name}":
+                value = tokens[index + 1]
+        return value
+
+    def persistence_paths(self, server_args: str = "") -> list[tuple[Path, Path]]:
+        """``(rdb_file, aof_dir)`` this server would load from, for the given server args.
+
+        The working directory is ``--dir`` from the server args when present
+        (it is appended last on the command line, so it wins), else
+        ``instance_dir``, else the legacy layout: the launching shell's cwd,
+        which is the home directory over SSH and the project root for a local
+        run, so both are listed. The file names honour ``--dbfilename`` and
+        ``--appenddirname``.
+        """
+        dbfilename = self._server_arg_value(server_args, "dbfilename") or self.DEFAULT_DBFILENAME
+        appenddirname = self._server_arg_value(server_args, "appenddirname") or self.DEFAULT_APPENDDIRNAME
+        explicit_dir = self._server_arg_value(server_args, "dir")
+        if explicit_dir is not None:
+            working_dirs = [Path(explicit_dir)]
+        elif self.instance_dir is not None:
+            working_dirs = [self.instance_dir]
+        else:
+            working_dirs = [Server.path_root, config.PROJECT_ROOT]
+        return [(d / dbfilename, d / appenddirname) for d in working_dirs]
+
+    async def remove_persistence_files(self, server_args: str = "") -> None:
+        """Delete this server's own RDB file and AOF directory before it starts.
+
+        A fresh valkey-server loads whatever ``dir/dbfilename`` and
+        ``dir/appenddirname`` hold. Conductress restarts the server before
+        every rep, so with ``--appendonly yes`` rep 2 would load the AOF rep 1
+        wrote (about 0.9 GB for 16 B SETs), answer LOADING for longer than the
+        readiness probe waits, and the task would fail. Only the exact paths
+        from :meth:`persistence_paths` are removed, never a wildcard.
+        """
+        for rdb_file, aof_dir in self.persistence_paths(server_args):
+            await self.run_host_command(f"rm -f {rdb_file}; rm -rf {aof_dir}", check=False)
+
     @staticmethod
     def get_num_cpus(io_threads: int) -> int:
         """Get number of CPUs allocated for server with specified io-threads parameter"""
@@ -627,6 +677,7 @@ class Server:
             io_threads = 1
         self.threads = io_threads
         await self.__pre_start()
+        await self.remove_persistence_files(server_args)
 
         # Allocate CPUs for this server (or use explicit override)
         if server_cpu_override:
@@ -705,18 +756,33 @@ class Server:
             await self._pin_valkey_threads()
 
     async def wait_until_ready(self) -> None:
-        """Wait until the server is ready to accept commands."""
+        """Wait until the server is ready to accept commands.
+
+        A server that answers ``LOADING`` is up but still reading its RDB or
+        AOF; the failure says so, because that is a persistence-files problem
+        (see :meth:`remove_persistence_files`), not a start failure.
+        """
+        last_reply: Optional[str] = None
         for _ in range(config.SERVER_READY_MAX_RETRIES):
             try:
                 out = await self.run_valkey_command("PING")
                 if out == "PONG":
                     return
+                last_reply = out
                 self.logger.debug(out)
             except asyncssh.ProcessError:
                 self.logger.warning("CLI error during wait_until_ready")
-            time.sleep(config.SERVER_READY_RETRY_DELAY)
+            await asyncio.sleep(config.SERVER_READY_RETRY_DELAY)
 
-        raise RuntimeError("Server did not start successfully")
+        waited = config.SERVER_READY_MAX_RETRIES * config.SERVER_READY_RETRY_DELAY
+        if last_reply is not None and last_reply.startswith("LOADING"):
+            raise RuntimeError(
+                f"server on port {self.port} still LOADING after {waited:g} s "
+                f"(reply: {last_reply!r}); it is reading an RDB or AOF left in its working directory"
+            )
+        raise RuntimeError(
+            f"Server did not start successfully on port {self.port} after {waited:g} s (last reply: {last_reply!r})"
+        )
 
     async def kill_all_valkey_instances_on_host(self):
         """Stop all instances of valkey server, regardless of which port they're running on"""

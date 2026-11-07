@@ -110,7 +110,7 @@ class TestServerEnvPrefix:
             await server.start(Path("/usr/bin/valkey-server"), io_threads=1, env_prefix='JE_MALLOC_CONF="prof:true"')
 
         # The start command should begin with the env prefix
-        start_cmd = commands_run[0]
+        start_cmd = next(c for c in commands_run if "/usr/bin/valkey-server" in c)
         assert start_cmd.startswith('JE_MALLOC_CONF="prof:true"')
         assert "/usr/bin/valkey-server" in start_cmd
 
@@ -157,5 +157,5 @@ class TestServerEnvPrefix:
 
             await server.start(Path("/usr/bin/valkey-server"), io_threads=1)
 
-        start_cmd = commands_run[0]
+        start_cmd = next(c for c in commands_run if "/usr/bin/valkey-server" in c)
         assert start_cmd.startswith("LD_LIBRARY_PATH=/usr/bin /usr/bin/valkey-server")
