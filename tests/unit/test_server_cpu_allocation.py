@@ -96,7 +96,7 @@ class TestServerCpuAllocation:
 
         await server.start(Path("/tmp/valkey-server"), 4, server_args="--io-threads-ownership yes")
 
-        launch = commands[0]
+        launch = next(c for c in commands if "/tmp/valkey-server" in c)
         assert launch.rstrip().endswith("--io-threads-ownership yes")
         # Generated args still present, and positioned before the user args
         assert launch.index("--bgsave-cpulist") < launch.index("--io-threads-ownership")
@@ -122,7 +122,7 @@ class TestServerCpuAllocation:
 
         await server.start(Path("/tmp/valkey-server"), 4)
 
-        launch = commands[0]
+        launch = next(c for c in commands if "/tmp/valkey-server" in c)
         assert "--bgsave-cpulist" in launch
         assert launch.rstrip().endswith("5")  # ends with the bgsave cpulist, nothing appended
 
