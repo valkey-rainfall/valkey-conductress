@@ -1084,3 +1084,107 @@ class TestFleetClientUrlEncoding:
         client.canary_status_runner("foo/bar")
         assert "foo%2Fbar" in observed["url"]
         assert "foo/bar" not in observed["url"].split("/api/v1/canary/status/")[1]
+
+
+# ======================================================================
+# Alarm surfacing: static files and webhook notices
+# ======================================================================
+
+
+class TestCanaryAlarmSurfacing:
+    def _service_with_hooks(self, canary_env, tmp_path, **kwargs):
+        notices = []
+
+        def notifier(request):
+            notices.append(json.loads(request.data.decode("utf-8")))
+
+        service = ControlService(
+            canary_env["database"],
+            canary_env["registry"],
+            300,
+            canary_profiles=canary_env["canary_profiles"],
+            notifier=notifier,
+            published_tasks_dir=tmp_path / "published",
+            **kwargs,
+        )
+        return service, notices
+
+    def _ingest(self, service, date, score, env=None):
+        """Through the service's canary branch, as record_outcome does."""
+        task_id = f"canary:armbench:throughput-get-v1:{date}"
+        outcome = {
+            "schema_version": 1,
+            "task_id": task_id,
+            "runner_id": "armbench",
+            "state": "completed",
+            "completed_at": f"{date}T12:00:00Z",
+            "result": {"score": score, "environment": env or {"kernel_release": "6.1"}, "provenance_schema_version": 2},
+            "error": None,
+        }
+        service._ingest_canary_observation(
+            task_id,
+            "armbench",
+            outcome,
+            {
+                "canary_id": f"throughput-get-v1:{date}",
+                "envelope_json": json.dumps({"task": {"note": "canary throughput-get-v1 v1"}}),
+            },
+        )
+
+    def test_static_files_are_written_after_each_ingest(self, canary_env, tmp_path):
+        service, _notices = self._service_with_hooks(canary_env, tmp_path, notification_url="https://hook.example/x")
+        self._ingest(service, "2026-09-01", 200000.0)
+        runner_file = tmp_path / "published" / "canary" / "armbench.json"
+        fleet_file = tmp_path / "published" / "canary" / "fleet.json"
+        assert runner_file.exists() and fleet_file.exists()
+        runner = json.loads(runner_file.read_text())["runner"]
+        assert runner["runner_id"] == "armbench" and runner["latest_observation"]["utc_date"] == "2026-09-01"
+        assert runner["latest_observation"]["candidate_signal"] == "insufficient-data"
+        fleet = json.loads(fleet_file.read_text())
+        assert [r["runner_id"] for r in fleet["runners"]] == ["armbench", "g4bench"]
+        assert not list((tmp_path / "published" / "canary").glob("*.tmp"))
+
+    def test_alarm_and_environment_change_post_one_notice_each(self, canary_env, tmp_path):
+        service, notices = self._service_with_hooks(
+            canary_env,
+            tmp_path,
+            notification_url="https://hook.example/approval",
+            canary_notification_url="https://hook.example/canary",
+        )
+        for day in range(1, 29):
+            self._ingest(service, f"2026-09-{day:02d}", 200000.0 + day)
+        assert notices == []  # within, no environment change
+        new_env = {"kernel_release": "6.1.189", "cpu_microcode": "0x2b000685"}
+        self._ingest(service, "2026-09-29", 224000.0, env=new_env)  # +12%: alarm on graviton3 (alarm_pct 4)
+        events = [n["event"] for n in notices]
+        assert events == ["canary.alarm", "canary.environment_change"]
+        alarm = notices[0]
+        assert alarm["runner_id"] == "armbench" and alarm["candidate_signal"] == "alarm" and alarm["delta_pct"] > 10
+        assert alarm["phase"] == "ready" and alarm["utc_date"] == "2026-09-29"
+        assert "kernel_release: '6.1' -> '6.1.189'" in notices[1]["env_change_annotation"]
+        # A replay of the same outcome posts nothing more.
+        self._ingest(service, "2026-09-29", 224000.0, env=new_env)
+        assert len(notices) == 2
+        runner = json.loads((tmp_path / "published" / "canary" / "armbench.json").read_text())["runner"]
+        assert runner["latest_observation"]["candidate_signal"] == "alarm"
+
+    def test_warning_posts_only_when_enabled_and_failures_never_block(self, canary_env, tmp_path):
+        service, notices = self._service_with_hooks(canary_env, tmp_path, notification_url="https://hook.example/x")
+        for day in range(1, 29):
+            self._ingest(service, f"2026-09-{day:02d}", 200000.0)
+        self._ingest(service, "2026-09-29", 206000.0)  # +3%: warning (2 <= d < 4)
+        assert notices == []
+        service.canary_notify_warning = True
+        service._notifier = lambda request: (_ for _ in ()).throw(OSError("hook down"))
+        self._ingest(service, "2026-09-30", 206000.0)
+        # The observation was still stored and published although the hook failed.
+        runner = json.loads((tmp_path / "published" / "canary" / "armbench.json").read_text())["runner"]
+        assert runner["latest_observation"]["utc_date"] == "2026-09-30"
+        assert runner["latest_observation"]["candidate_signal"] == "warning"
+
+    def test_no_published_dir_means_no_files_and_no_error(self, canary_env):
+        service = ControlService(
+            canary_env["database"], canary_env["registry"], 300, canary_profiles=canary_env["canary_profiles"]
+        )
+        service.publish_canary_status()
+        self._ingest(service, "2026-09-01", 200000.0)

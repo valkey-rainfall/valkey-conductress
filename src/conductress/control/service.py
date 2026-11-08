@@ -72,6 +72,8 @@ class ControlService:
         notifier: Optional[Any] = None,
         published_tasks_dir: Optional[Any] = None,
         results_jsonl_path: Optional[Any] = None,
+        canary_notification_url: Optional[str] = None,
+        canary_notify_warning: bool = False,
     ):
         self.database = database
         self.registry = registry
@@ -79,6 +81,10 @@ class ControlService:
         self.user_directory = user_directory
         self.provenance_gate = provenance_gate
         self.notification_url = notification_url
+        # Canary notices go to their own URL when one is configured, else to
+        # the approval webhook. ``canary_notify_warning`` also posts warnings.
+        self.canary_notification_url = canary_notification_url or notification_url
+        self.canary_notify_warning = canary_notify_warning
         self.published_tasks_dir = published_tasks_dir
         self.results_jsonl_path = results_jsonl_path
         # Injectable HTTP delivery for the approval webhook; defaults to urlopen.
@@ -243,36 +249,98 @@ class ControlService:
             used_seconds += estimate_task_duration_seconds(task_body)
         return (used_seconds + additional_seconds) > quota_minutes * 60
 
-    def _notify_pending_approval(self, task: dict[str, Any], reason: Optional[str]) -> None:
-        """POST a small JSON notice to the configured approval webhook, if any.
+    def _notify(self, url: Optional[str], payload: dict[str, Any]) -> None:
+        """POST a small JSON notice to a webhook, if one is configured.
 
-        Best-effort: a delivery failure is logged and never blocks submission.
-        The payload is documented in docs/control-service.md.
+        Best-effort: a delivery failure is logged and never blocks the caller.
+        The payloads are documented in docs/control-service.md.
         """
-        if not self.notification_url:
+        if not url:
             return
-        payload = {
-            "schema_version": 1,
-            "event": "task.pending_approval",
-            "task_id": task["task_id"],
-            "batch_id": task.get("batch_id"),
-            "runner_id": task["runner_id"],
-            "submitter_login": task.get("submitter_login"),
-            "submitted_by": task.get("submitted_by"),
-            "reason": reason,
-        }
         try:
             import urllib.request  # local import keeps module import light
 
             request = urllib.request.Request(
-                self.notification_url,
+                url,
                 data=json.dumps(payload).encode("utf-8"),
                 headers={"Content-Type": "application/json"},
                 method="POST",
             )
             self._notifier(request)
-        except Exception:  # pragma: no cover - defensive, never blocks submit
-            logger.warning("approval notification failed for task %s", task["task_id"], exc_info=True)
+        except Exception:  # pragma: no cover - defensive, never blocks the caller
+            logger.warning("%s notification failed for %s", payload.get("event"), payload.get("task_id"), exc_info=True)
+
+    def _notify_pending_approval(self, task: dict[str, Any], reason: Optional[str]) -> None:
+        self._notify(
+            self.notification_url,
+            {
+                "schema_version": 1,
+                "event": "task.pending_approval",
+                "task_id": task["task_id"],
+                "batch_id": task.get("batch_id"),
+                "runner_id": task["runner_id"],
+                "submitter_login": task.get("submitter_login"),
+                "submitted_by": task.get("submitted_by"),
+                "reason": reason,
+            },
+        )
+
+    def _notify_canary(self, observation: dict[str, Any], runner_id: str, profile_id: str) -> None:
+        """Post ``canary.alarm`` / ``canary.environment_change`` notices for one accepted observation.
+
+        At most one notice per event per accepted observation (one accepted
+        observation per runner and day). An alarm in the observation or
+        calibrating phase is posted with its ``phase`` so the receiver can
+        tell an uncalibrated series; it is a notice, not a verdict.
+        """
+        base = {
+            "schema_version": 1,
+            "runner_id": runner_id,
+            "profile_id": profile_id,
+            "utc_date": observation.get("utc_date"),
+            "task_id": observation.get("task_id"),
+            "score": observation.get("score"),
+            "ref_median": observation.get("ref_median"),
+            "delta_pct": observation.get("delta_pct"),
+            "candidate_signal": observation.get("candidate_signal"),
+            "phase": observation.get("phase"),
+            "env_change_annotation": observation.get("env_change_annotation"),
+        }
+        signal = observation.get("candidate_signal")
+        if signal == "alarm" or (signal == "warning" and self.canary_notify_warning):
+            self._notify(self.canary_notification_url, {**base, "event": "canary.alarm"})
+        if observation.get("env_change_annotation"):
+            self._notify(self.canary_notification_url, {**base, "event": "canary.environment_change"})
+
+    def publish_canary_status(self, runner_id: Optional[str] = None) -> None:
+        """Write the static canary status files the dashboard reads.
+
+        ``canary/<runner_id>.json`` for the runner (or every runner when None)
+        and ``canary/fleet.json`` for all, under the published tasks
+        directory, written atomically like the per-task files. No auth, like
+        those files: a canary status holds nothing secret. Failures are logged
+        and never propagate.
+        """
+        if self.published_tasks_dir is None:
+            return
+        try:
+            canary_dir = self.published_tasks_dir / "canary"
+            canary_dir.mkdir(parents=True, exist_ok=True)
+            fleet = self.canary_status()
+            for entry in fleet["runners"]:
+                if runner_id is None or entry["runner_id"] == runner_id:
+                    self._write_static(
+                        canary_dir / f"{entry['runner_id']}.json", {"schema_version": 1, "runner": entry}
+                    )
+            self._write_static(canary_dir / "fleet.json", fleet)
+        except Exception:  # pylint: disable=broad-except
+            logger.warning("unable to publish canary status", exc_info=True)
+
+    @staticmethod
+    def _write_static(target: Any, payload: dict[str, Any]) -> None:
+        temporary = target.with_suffix(".json.tmp")
+        temporary.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
+        temporary.replace(target)
 
     def submit_task(
         self,
@@ -883,7 +951,8 @@ class ControlService:
             if platform_id:
                 enriched_env["platform"] = platform_id
 
-            self.drift_analyzer.ingest_outcome(
+            already = self.drift_analyzer.get_observation(runner_id, profile_id, profile_version, utc_date)
+            observation = self.drift_analyzer.ingest_outcome(
                 task_id=task_id,
                 runner_id=runner_id,
                 outcome=outcome,
@@ -898,6 +967,17 @@ class ControlService:
                 task_id,
                 exc_info=True,
             )
+            return
+        if (
+            already is None
+            and observation is not None
+            and observation.get("accepted", 1)
+            and observation.get("task_id") == task_id
+        ):
+            # Only a NEWLY accepted observation is surfaced: a replayed outcome
+            # (same task id) or a second task on an accepted date is not.
+            self._notify_canary(observation, runner_id, profile_id)
+        self.publish_canary_status(runner_id)
 
     @staticmethod
     def _parse_version_from_note(canary_metadata: dict[str, Any]) -> int:

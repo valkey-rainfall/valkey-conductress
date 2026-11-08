@@ -182,6 +182,31 @@ When `NOTIFICATION_URL` is set, the control plane POSTs a small JSON notice to t
 }
 ```
 
+### Canary notices and static canary status
+
+After every newly accepted canary observation the service writes two static
+files under the published tasks directory, no auth like the task files:
+`canary/<runner_id>.json` (`{"schema_version": 1, "runner": <the entry GET
+/api/v1/canary/status returns for that runner>}`) and `canary/fleet.json`
+(the whole status document). They are also written at startup. The dashboard
+reads them for the runner cards and the platform banner.
+
+It also POSTs, best effort and never blocking the ingest, one notice per event
+per accepted observation to `CANARY_NOTIFICATION_URL` (default: the approval
+webhook `NOTIFICATION_URL`):
+
+- `canary.alarm` when `candidate_signal` is `alarm` (and `warning` when
+  `CANARY_NOTIFY_WARNING=true`);
+- `canary.environment_change` when the observation carries an
+  `env_change_annotation`.
+
+Both carry `schema_version`, `event`, `runner_id`, `profile_id`, `utc_date`,
+`task_id`, `score`, `ref_median`, `delta_pct`, `candidate_signal`, `phase` and
+`env_change_annotation`. An alarm in the `observation` or `calibrating` phase
+is posted with its phase: it is a notice about an uncalibrated series, not a
+verdict. `actionable` stays false; nothing acts on a notice automatically. A
+replayed outcome posts nothing.
+
 ## Results on the data host
 
 At completion a runner pushes the full result record, not a truncated summary. The control plane stores it in the task's SQLite row (authoritative). When configured it also mirrors each completed task to an append-only results JSONL (`RESULTS_JSONL_PATH`) and publishes a static per-task JSON under the published tasks directory (`PUBLISHED_TASKS_DIR/tasks/<task_id>.json`), written atomically. The static files carry no auth (results are public) so the dashboard and agents can fetch them directly, and `GET /api/v1/tasks/{task_id}` and `GET /api/v1/batches/{batch_id}` return the same records over the API.
