@@ -91,8 +91,10 @@ def test_runner_info_and_result_provenance_share_identity(monkeypatch):
     assert info["platform"]["aliases"] == ["graviton3", "arm64"]
     assert info["environment"]["instance_id"] == "i-test"
     assert provenance == {
-        "provenance_schema_version": 1,
+        "provenance_schema_version": 2,
         "runner_id": "armbench",
         "platform": "arm64/c7g.metal/graviton3",
-        "environment": info["environment"],
+        # The host part is the cached runner info; the per-task cachecannon
+        # part is None when no binary is named.
+        "environment": {**info["environment"], "cachecannon_commit": None, "cachecannon_dirty": None},
     }

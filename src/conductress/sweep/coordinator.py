@@ -245,6 +245,43 @@ class BaseSweepCoordinator(ABC):
         self.state.save(self.state_file)
         logger.info("Sweep build failure: %s", commit[:8])
 
+    def _find_task_entry(self, task: BaseTaskData) -> Optional[dict]:
+        """Find the output.jsonl entry for a completed task. Returns parsed dict or None."""
+        output_file = CONDUCTRESS_RESULTS / "output.jsonl"
+        if not output_file.exists():
+            return None
+        for line in reversed(output_file.read_text().strip().splitlines()):
+            try:
+                entry = json.loads(line)
+                if entry.get("task_id") == task.task_id:
+                    return entry
+            except (ValueError, KeyError, TypeError):
+                continue
+        return None
+
+    def _annotate_point(self, task: BaseTaskData) -> None:
+        """Attach the task id, measurement time and reduced environment to the task's point.
+
+        ``task_id`` lets the exporters honour the exclusion list
+        (sweep/generations.py); ``environment`` and ``measured_at`` (the result
+        row's provenance and end time) let the exporter draw environment
+        period markers. A point that cannot be found, or a task without a
+        result row, leaves the point as it is.
+        """
+        from conductress.runner_identity import environment_for_period
+
+        commit = getattr(task, "sweep_commit", "")
+        point = self.state.points.get(commit) if commit else None
+        if point is None:
+            return
+        point.task_id = task.task_id
+        entry = self._find_task_entry(task)
+        if entry:
+            point.environment = environment_for_period(entry)
+            end_time = entry.get("end_time")
+            point.measured_at = end_time if isinstance(end_time, str) else None
+        self.state.save(self.state_file)
+
     # --- TaskSubscriber protocol ---
 
     def on_queue_empty(self) -> None:
@@ -268,10 +305,7 @@ class BaseSweepCoordinator(ABC):
         if result:
             value, cv, reps = result
             self.record_result(task.sweep_commit, value, cv, reps)  # type: ignore[attr-defined]
-            point = self.state.points.get(task.sweep_commit)  # type: ignore[attr-defined]
-            if point is not None:
-                point.task_id = task.task_id
-                self.state.save(self.state_file)
+            self._annotate_point(task)
             # Extract perf counters if available
             perf = self._extract_perf_counters(task)  # pylint: disable=assignment-from-none
             if perf:
@@ -680,22 +714,6 @@ class SweepCoordinator(BaseSweepCoordinator):
             max_reps=SWEEP_MAX_REPS,
             target_cv=SWEEP_TARGET_CV,
         )
-
-    def _find_task_entry(self, task: BaseTaskData) -> Optional[dict]:
-        """Find the output.jsonl entry for a completed task. Returns parsed dict or None."""
-
-        output_file = CONDUCTRESS_RESULTS / "output.jsonl"
-        if not output_file.exists():
-            return None
-
-        for line in reversed(output_file.read_text().strip().splitlines()):
-            try:
-                entry = json.loads(line)
-                if entry.get("task_id") == task.task_id:
-                    return entry
-            except (ValueError, KeyError, TypeError):
-                continue
-        return None
 
     def _extract_result(self, task: BaseTaskData) -> Optional[tuple[float, float, int]]:
         entry = self._find_task_entry(task)

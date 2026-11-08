@@ -864,6 +864,14 @@ class ControlService:
             if provenance_sv is not None:
                 enriched_env["provenance_schema_version"] = provenance_sv
             enriched_env["runner_id"] = result.get("runner_id", runner_id)
+            # The host the server ran on, when it is not the runner host
+            # (g4net): its kernel, glibc, microcode and boot id are what the
+            # score depends on, so they join the fingerprint as server_* keys.
+            server_env = result.get("server_environment")
+            if isinstance(server_env, dict) and not server_env.get("same_host", False):
+                for key in ("kernel_release", "glibc_version", "cpu_microcode", "boot_id", "host_fingerprint"):
+                    if key in server_env:
+                        enriched_env[f"server_{key}"] = server_env[key]
             # Prefer result provenance; fall back to the fleet manifest.
             platform_id = result.get("platform")
             if not platform_id:

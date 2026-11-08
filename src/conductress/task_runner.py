@@ -204,6 +204,27 @@ class TaskRunner:
         if nudge_url:
             self._subscribers.append(NudgeHook(nudge_url, events=nudge_on))
 
+    @staticmethod
+    async def _server_environment(server_info) -> Optional[dict]:
+        """The environment of the host the primary server runs on, read once per task.
+
+        Read before the task starts (never inside a measured window) so the
+        result row can say which kernel, glibc, microcode and boot the SERVER
+        ran under; on the loopback runners that is this host, on g4net it is
+        another machine. ``same_host`` compares boot ids, which are unique per
+        host and boot. A failed read logs a warning and leaves None.
+        """
+        from .runner_identity import get_runner_info
+
+        try:
+            environment = await Server(server_info.ip, username=server_info.username).collect_host_environment()
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.warning("Could not read the server host environment of %s: %s", server_info.ip, exc)
+            return None
+        local_boot = get_runner_info()["environment"].get("boot_id")
+        environment["same_host"] = bool(environment.get("boot_id")) and environment.get("boot_id") == local_boot
+        return environment
+
     async def __run_task(self, task_data: BaseTaskData) -> None:
         """Run a task, ensuring CPU allocations are released on failure."""
         servers = get_servers()
@@ -212,6 +233,7 @@ class TaskRunner:
             raise RuntimeError(f"Task needs {server_count} configured server(s); servers.json has {len(servers)}.")
 
         task_runner: BaseTaskRunner = task_data.prepare_task_runner(servers[:server_count])
+        task_runner.file_protocol.server_environment = await self._server_environment(servers[0])
         # Pin this process to management cores for the task's duration when the
         # benchmark host is this machine (its CPU time is otherwise interference).
         management: Optional[ManagementCores] = None

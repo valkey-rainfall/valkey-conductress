@@ -296,6 +296,7 @@ class MemorySweepCoordinator(BaseSweepCoordinator):
         if result:
             value, cv, reps = result
             self.record_result(task.sweep_commit, value, cv, reps)  # type: ignore[attr-defined]
+            self._annotate_point(task)
 
             breakdown = self._extract_breakdown(task)
             raw_stacks = self._extract_raw_stacks(task)

@@ -20,7 +20,7 @@ import time
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 
 class PointStatus(Enum):
@@ -92,6 +92,11 @@ class BenchmarkPoint:
     # exporter honour the task exclusion list (sweep/generations.py). None on
     # points recorded before the field existed.
     task_id: Optional[str] = None
+    # The reduced environment of the result row (runner_identity.environment_for_period)
+    # and the row's end time, so the exporter can draw environment period
+    # markers. None on points recorded before the fields existed.
+    environment: Optional[dict[str, Any]] = None
+    measured_at: Optional[str] = None
     status: PointStatus = PointStatus.PENDING
 
     @property
@@ -253,6 +258,8 @@ class SweepState:
                     "cpu_stacks_io": p.cpu_stacks_io,
                     "sample": p.sample,
                     "task_id": p.task_id,
+                    "environment": p.environment,
+                    "measured_at": p.measured_at,
                     "status": p.status.name,
                 }
                 for commit, p in self.points.items()
@@ -318,6 +325,8 @@ class SweepState:
                 cpu_stacks_io=p_data.get("cpu_stacks_io"),
                 sample=p_data.get("sample"),
                 task_id=p_data.get("task_id"),
+                environment=p_data.get("environment"),
+                measured_at=p_data.get("measured_at"),
                 status=PointStatus[p_data.get("status", "PENDING")],
             )
 

@@ -285,7 +285,7 @@ class TestExportManifest:
         manifest_file = tmp_path / "manifest-amd64.json"
         assert manifest_file.exists()
         data = json.loads(manifest_file.read_text())
-        assert data["version"] == 3
+        assert data["version"] == 4
         assert data["epoch"] == "v1"
         assert [epoch["id"] for epoch in data["epochs"]] == ["v1"]
         assert data["platform"] == "amd64"

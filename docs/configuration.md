@@ -254,6 +254,40 @@ sudo systemctl start conductress.service
 or, for a memory definition change, `--all-memory` and `--all-memory --engine
 redis` in place of the two `--workload` lines.
 
+### Environment periods
+
+Every point a coordinator records now carries the task id, the result row's
+end time (`measured_at`) and the row's reduced environment
+(`runner_identity.environment_for_period`: kernel, glibc, microcode,
+Conductress revision, cachecannon commit, boot id, the same for the server
+host when it is another machine, and the provenance schema version). The
+exporter groups the ordered points of a series into environment PERIODS: a
+new period starts wherever the recorded environment differs between two
+consecutive points, judged by the same `environment_changes` rule as the
+canary annotation. `series.json` publishes `periods` (id, commit index and
+date range, the period's environment, `boot_only`, a short `label` such as
+`kernel_release: 6.1.170-... -> 6.1.189-...; cpu_microcode: ...`) and each
+point's `period`; an annotation whose two points sit in different periods is
+flagged `env_period_crossed` so a reader does not blame a commit for an OS
+change. A change of boot id alone is a `boot_only` period (a reboot: a
+possible change, drawn lighter than a package or kernel change). Points
+recorded before the fields existed join the previous period, so the deploy
+that starts recording draws no boundary.
+
+Periods are MARKERS. Nothing splits a series automatically; that is the
+manual decision described under "Series generations".
+
+Manual events live in `sweep_data/environment_events.json`, next to
+`generations.json`, for changes the provenance fields cannot see (a BIOS
+update, a known hardware event):
+
+```
+{"events": [{"at": "2026-11-06T18:09:40Z", "label": "intelbench reboot after the OS update"}]}
+```
+
+A point measured at or after an event's `at` starts a period labelled with
+the event. The manifest `version` is 4 since periods and generations exist.
+
 ### Series generations
 
 An epoch names the measurement protocol and is the same on every platform. A

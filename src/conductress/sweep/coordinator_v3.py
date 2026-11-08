@@ -180,7 +180,16 @@ class BaseCachecannonSweepCoordinatorV3(BaseSweepCoordinator):
             perf_stat_enabled=True,
         )
 
+    def _per_run_scores(self, entry: dict) -> list:
+        """The recorded per-rep series of this coordinator's score metric."""
+        data = entry.get("data", {})
+        if self._score_metric == "throughput":
+            return data.get("per_run_rps", [])
+        return data.get(f"per_run_{self._score_metric}_us", [])
+
     def _find_task_entry(self, task: BaseTaskData) -> Optional[dict]:
+        # Same as the base implementation, read through this module's
+        # CONDUCTRESS_RESULTS so a test can redirect the v3 coordinators alone.
         output_file = CONDUCTRESS_RESULTS / "output.jsonl"
         if not output_file.exists():
             return None
@@ -192,13 +201,6 @@ class BaseCachecannonSweepCoordinatorV3(BaseSweepCoordinator):
             except (ValueError, KeyError, TypeError):
                 continue
         return None
-
-    def _per_run_scores(self, entry: dict) -> list:
-        """The recorded per-rep series of this coordinator's score metric."""
-        data = entry.get("data", {})
-        if self._score_metric == "throughput":
-            return data.get("per_run_rps", [])
-        return data.get(f"per_run_{self._score_metric}_us", [])
 
     def _extract_result(self, task: BaseTaskData) -> Optional[tuple[float, float, int]]:
         entry = self._find_task_entry(task)
