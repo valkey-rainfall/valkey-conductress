@@ -51,6 +51,61 @@ MIN_SAMPLES_FOR_STATS = 1
 # MAD-to-sigma consistency constant for normal distributions
 MAD_SIGMA_SCALE = 1.4826
 
+# Keys whose change means only "the host rebooted" (a possible performance
+# change, marked more lightly than a package or kernel change).
+BOOT_KEYS = ("boot_id", "server_boot_id")
+# Keys that describe the record, not the environment; never a change.
+_META_KEYS = ("provenance_schema_version", "same_host")
+
+
+def environment_changes(prev_env: Dict[str, Any], environment: Dict[str, Any]) -> List[str]:
+    """``key: old -> new`` for every environment field that differs, sorted by key.
+
+    Shared by the canary annotation and the sweep environment periods, so both
+    describe a change in the same words. A key the OLD record did not carry
+    because its provenance schema predates the field (the old side is absent,
+    the old record's ``provenance_schema_version`` is lower) is not a change:
+    a deploy that adds fields must not read as an environment event. A key
+    present on both sides with a real ``None`` (microcode on ARM) that gains a
+    value is a change.
+    """
+    prev_schema = prev_env.get("provenance_schema_version") or 0
+    cur_schema = environment.get("provenance_schema_version") or 0
+    changes: List[str] = []
+    for key in sorted(set(prev_env) | set(environment)):
+        if key in _META_KEYS:
+            continue
+        old_v = prev_env.get(key)
+        new_v = environment.get(key)
+        if old_v == new_v:
+            continue
+        if key not in prev_env and cur_schema > prev_schema:
+            continue  # new field, not a changed environment
+        changes.append(f"{key}: {old_v!r} -> {new_v!r}")
+    return changes
+
+
+def boot_only(changes: List[str]) -> bool:
+    """Whether every change in the list is a boot id (a reboot and nothing else)."""
+    return bool(changes) and all(c.split(":", 1)[0] in BOOT_KEYS for c in changes)
+
+
+def change_label(changes: List[str], max_value_chars: int = 24) -> str:
+    """A short label for a boundary marker: ``reboot`` or ``kernel_release: a -> b; ...``."""
+    if not changes:
+        return ""
+    if boot_only(changes):
+        return "server reboot" if all(c.startswith("server_") for c in changes) else "reboot"
+    parts = []
+    for change in changes:
+        key, _, rest = change.partition(": ")
+        if key in BOOT_KEYS:
+            parts.append("server reboot" if key.startswith("server_") else "reboot")
+            continue
+        old_v, _, new_v = rest.partition(" -> ")
+        parts.append(f"{key}: {old_v.strip(chr(39))[:max_value_chars]} -> {new_v.strip(chr(39))[:max_value_chars]}")
+    return "; ".join(parts)
+
 
 def _median(values: List[float]) -> float:
     """Deterministic median: average of two middle values for even counts."""
@@ -355,15 +410,8 @@ class DriftAnalyzer:
                 ).fetchone()
                 if prev_env_row is not None and prev_env_row["environment_json"] is not None:
                     prev_env = json.loads(prev_env_row["environment_json"])
-                    if prev_env != environment:
-                        changes = []
-                        all_keys = sorted(set(list(prev_env.keys()) + list(environment.keys())))
-                        for k in all_keys:
-                            old_v = prev_env.get(k)
-                            new_v = environment.get(k)
-                            if old_v != new_v:
-                                changes.append(f"{k}: {old_v!r} -> {new_v!r}")
-                        env_change_annotation = "; ".join(changes) if changes else None
+                    changes = environment_changes(prev_env, environment)
+                    env_change_annotation = "; ".join(changes) if changes else None
 
             # Extract provenance fields from outcome
             result_obj = outcome.get("result") or {}

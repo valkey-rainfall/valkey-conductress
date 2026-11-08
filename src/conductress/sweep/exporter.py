@@ -354,6 +354,10 @@ def export_series(
             entry["pr_title"] = pr_title
         if point.sample is not None:
             entry["sample"] = point.sample
+        if point.measured_at is not None:
+            entry["measured_at"] = point.measured_at
+        if point.environment is not None:
+            entry["env"] = point.environment
         if include_breakdown and point.raw_stacks and num_keys > 0:
             entry["breakdown"] = recategorize_from_stacks(point.raw_stacks, num_keys)
             has_breakdown = True
@@ -361,6 +365,11 @@ def export_series(
             entry["breakdown"] = point.breakdown
             has_breakdown = True
         points.append(entry)
+
+    # Environment periods: runs of consecutive points measured under one
+    # environment, with a boundary (and its label) wherever the recorded
+    # provenance changed. Markers only: the series is never split here.
+    periods = _build_periods(points, load_environment_events())
 
     # Build landmarks list
     landmarks = [
@@ -376,6 +385,13 @@ def export_series(
 
     # Build annotations from segments that have been bisected down to 1 commit
     annotations = _build_annotations(state, planner, workload, lower_is_better)
+    period_of = {p["commit"]: p["period"] for p in points}
+    for annotation in annotations:
+        left = annotation.pop("_left_commit", None)
+        if left is not None and period_of.get(left) != period_of.get(annotation["commit"]):
+            # The two points sit in different environment periods: the delta
+            # may be the environment, not the commit.
+            annotation["env_period_crossed"] = True
 
     series: dict[str, Any] = {
         "metadata": {
@@ -392,6 +408,7 @@ def export_series(
         "points": points,
         "landmarks": landmarks,
         "annotations": annotations,
+        "periods": periods,
     }
 
     # Add category metadata if any points have breakdown data
@@ -423,6 +440,101 @@ def export_series(
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(series, indent=2))
+
+
+def _event_bucket(measured_at: Optional[str], events: list[dict[str, Any]]) -> Optional[int]:
+    """How many manual environment events precede a measurement (None when its time is unknown)."""
+    if not measured_at:
+        return None
+    try:
+        from conductress.sweep.generations import parse_task_time
+
+        moment = parse_task_time(measured_at)
+    except ValueError:
+        return None
+    return sum(1 for e in events if e["at"] <= moment)
+
+
+def _build_periods(points: list[dict[str, Any]], events: Optional[list[dict[str, Any]]] = None) -> list[dict[str, Any]]:
+    """Group ordered point entries into environment periods; set each entry's ``period``.
+
+    Consecutive points whose recorded environments differ (as the canary's
+    change annotation judges them, ``environment_changes``) start a new period,
+    labelled with the change. A change of boot id alone is a ``boot_only``
+    period (a reboot: a possible change, drawn lighter). Manual events from
+    ``environment_events.json`` (``at`` UTC, ``label``) also open a period for
+    points measured at or after them. A point without a recorded environment
+    joins the period of the previous point, so a deploy that starts recording
+    draws no boundary by itself.
+    """
+    from conductress.control.drift_analyzer import boot_only, change_label, environment_changes
+
+    events = sorted(events or [], key=lambda e: e["at"])
+    periods: list[dict[str, Any]] = []
+    current: Optional[dict[str, Any]] = None
+    prev_env: Optional[dict[str, Any]] = None
+    prev_bucket: Optional[int] = None
+    for entry in points:
+        env = entry.get("env")
+        bucket = _event_bucket(entry.get("measured_at"), events)
+        changes: list[str] = []
+        if current is not None and env is not None and prev_env is not None:
+            changes = environment_changes(prev_env, env)
+            if bucket is not None and prev_bucket is not None and bucket != prev_bucket:
+                for event in events[prev_bucket:bucket]:
+                    changes.append(f"event: {event.get('label', 'environment event')}")
+        if current is None or changes:
+            current = {
+                "id": len(periods),
+                "start_commit_index": entry["commit_index"],
+                "end_commit_index": entry["commit_index"],
+                "start_date": entry["date"],
+                "end_date": entry["date"],
+                "env": env,
+                "boot_only": boot_only(changes) if changes else False,
+                "label": change_label([c for c in changes if not c.startswith("event: ")]) if changes else "",
+            }
+            event_labels = [c[len("event: ") :] for c in changes if c.startswith("event: ")]
+            if event_labels:
+                current["label"] = "; ".join(filter(None, [current["label"], *event_labels]))
+                current["boot_only"] = False
+            periods.append(current)
+        else:
+            last = periods[-1]
+            last["end_commit_index"] = entry["commit_index"]
+            last["end_date"] = entry["date"]
+            if last["env"] is None and env is not None:
+                last["env"] = env
+        if env is not None:
+            prev_env = env
+        if bucket is not None:
+            prev_bucket = bucket
+        entry["period"] = periods[-1]["id"]
+    return periods
+
+
+def load_environment_events(path: Optional[Path] = None) -> list[dict[str, Any]]:
+    """Manual environment events (``sweep_data/environment_events.json``): ``[{at, label}]``.
+
+    ``at`` is an ISO 8601 UTC instant. Written by hand next to generations.json
+    for changes the provenance fields cannot see (a known hardware event, a
+    BIOS update). Missing file: no events.
+    """
+    from datetime import datetime, timezone
+
+    from conductress.config import SWEEP_STATE_DIR
+
+    path = path or (SWEEP_STATE_DIR / "environment_events.json")
+    if not path.exists():
+        return []
+    data = json.loads(path.read_text(encoding="utf-8"))
+    events = data.get("events", []) if isinstance(data, dict) else data
+    parsed = []
+    for event in events:
+        at = datetime.fromisoformat(str(event["at"]).replace("Z", "+00:00"))
+        at = at.replace(tzinfo=timezone.utc) if at.tzinfo is None else at.astimezone(timezone.utc)
+        parsed.append({"at": at, "label": str(event.get("label", ""))})
+    return parsed
 
 
 def _build_annotations(
@@ -480,7 +592,7 @@ def _build_annotations(
                     annotation["pr"] = pr
                 if pr_title is not None:
                     annotation["pr_title"] = pr_title
-                # Check for manual note in point
+                annotation["_left_commit"] = left.commit  # consumed by export_series
                 annotations.append(annotation)
 
     return annotations
@@ -1055,7 +1167,7 @@ def export_manifest(
     memory = [w for w, m in workloads if m == "memory"]
     latency = [w for w, m in workloads if m == "latency"]
     manifest: dict[str, Any] = {
-        "version": 3,
+        "version": 4,
         "platform": platform_id,
         "epoch": epoch_id,
         "epochs": epochs or [{"id": "v1", "label": "Legacy v1 (stock generator)", "generator": "stock"}],

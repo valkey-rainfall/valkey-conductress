@@ -86,6 +86,10 @@ class FileProtocol:
 
         self._metrics_cache: list[MetricData] = []
         self._last_read_position = 0
+        # Environment of the host the server runs on, read once per task by
+        # the task runner before the task starts (None when it could not be
+        # read). Written to the result row as ``server_environment``.
+        self.server_environment: Optional[dict[str, Any]] = None
 
     def write_status(self, status: BenchmarkStatus) -> None:
         """Atomically write status to file."""
@@ -174,7 +178,10 @@ class FileProtocol:
             if task_document:
                 data["duration_family"] = task_family(task_document.get("task_type", ""))
                 data["expected_duration_sec"] = estimate_task_duration_seconds(task_document)
-            data.update(get_result_provenance())
+            cachecannon_binary = task_document.get("cachecannon_binary") if task_document else None
+            data.update(get_result_provenance(cachecannon_binary if isinstance(cachecannon_binary, str) else None))
+            if self.server_environment is not None:
+                data["server_environment"] = dict(self.server_environment)
             f.write(json.dumps(data))
             f.write("\n")
 

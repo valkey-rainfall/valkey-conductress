@@ -12,6 +12,7 @@ import asyncssh
 from conductress.binary_manager import BinaryManager
 from conductress.cpu_allocator import AllocationTag, CpuAllocator
 from conductress.profiling_manager import ProfilingManager
+from conductress.runner_identity import REMOTE_ENVIRONMENT_COMMAND, parse_remote_environment
 from conductress.ssh_host import SshHost
 from conductress.stabilization_manager import StabilizationManager
 from conductress.utility import async_run, parse_cpulist
@@ -783,6 +784,16 @@ class Server:
         raise RuntimeError(
             f"Server did not start successfully on port {self.port} after {waited:g} s (last reply: {last_reply!r})"
         )
+
+    async def collect_host_environment(self) -> dict:
+        """Kernel, glibc, microcode, boot id and identity of the host this server runs on.
+
+        One shell command over the host connection (local files and getconf
+        only), parsed by ``runner_identity.parse_remote_environment``. Called by
+        the task runner once per task, outside any measured window.
+        """
+        out, _ = await self.run_host_command(REMOTE_ENVIRONMENT_COMMAND, check=False)
+        return parse_remote_environment(out)
 
     async def kill_all_valkey_instances_on_host(self):
         """Stop all instances of valkey server, regardless of which port they're running on"""

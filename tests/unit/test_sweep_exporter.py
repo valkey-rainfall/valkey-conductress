@@ -329,7 +329,7 @@ class TestEpochManifestExport:
             )
         path = tmp_path / "manifest-arm64.json"
         payload = json.loads(path.read_text())
-        assert payload["version"] == 3
+        assert payload["version"] == 4
         assert payload["epoch"] == "v1"
         assert [e["id"] for e in payload["epochs"]] == ["v1", "v2"]
 

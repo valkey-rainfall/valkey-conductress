@@ -188,6 +188,23 @@ At completion a runner pushes the full result record, not a truncated summary. T
 
 The record keeps every scalar and aggregate, the peak-memory scalars, and the categorized jemalloc `breakdown`. It drops only the unbounded stack arrays: the jemalloc per-frame `raw_stacks` and the collapsed CPU flamegraph stacks (`cpu_stacks_main`, `cpu_stacks_io`). The full stacks remain on the runner and in the runner-published artifacts.
 
+### Environment provenance (schema 2)
+
+Every result row carries `provenance_schema_version`, `runner_id`, `platform` and an `environment` block built by `runner_identity.get_result_provenance`. Schema 2 adds, next to `host_fingerprint`, `instance_id`, `kernel_release`, `machine`, `cpu_model` and `conductress_revision`:
+
+| Field | Source | Absent |
+|---|---|---|
+| `glibc_version` | `gnu_get_libc_version` of the running process (ctypes), fallback `platform.libc_ver` | `null` on a non-glibc libc |
+| `cpu_microcode` | `/proc/cpuinfo` `microcode` of the first processor | `null` on Graviton (not exposed); `null -> null` is never a change |
+| `boot_id` | `/proc/sys/kernel/random/boot_id` | `null` off Linux |
+| `cachecannon_commit`, `cachecannon_dirty` | `git rev-parse HEAD` and `git status` of the checkout above the task's `cachecannon_binary` (cached per path and mtime); `cachecannon_sha256` instead when the binary is not in a checkout | `null` for tasks without cachecannon |
+
+The host fields are cached for the runner process: kernel, boot id, glibc and microcode cannot change under a running runner (a reboot ends the process, a package update applies to new processes), so the cached values are what the runner ran with.
+
+A row also carries `server_environment` when the task runner could read the host the primary server ran on (one shell command over the host connection, once per task, before the task starts): `host_fingerprint`, `instance_id`, `kernel_release`, `machine`, `cpu_model`, `glibc_version`, `cpu_microcode`, `boot_id` and `same_host` (true when the server's boot id equals the runner's). On the loopback runners the two blocks describe one host; on g4net the server block is the other machine. For the canary annotation the service adds the server block's `kernel_release`, `glibc_version`, `cpu_microcode`, `boot_id` and `host_fingerprint` as `server_*` keys only when `same_host` is false.
+
+The canary's `env_change_annotation` is built by `drift_analyzer.environment_changes`: a key the previous observation did not carry because its provenance schema predates the field is not a change (a deploy that adds fields produces no annotation); a real `null` that gains a value is. The sweep exporter uses the same function for its environment period markers (configuration.md, "Environment periods").
+
 ## Outcome size
 
 One request body limit applies on the whole path from the runner to the database, and every part of the deployment must agree on it:

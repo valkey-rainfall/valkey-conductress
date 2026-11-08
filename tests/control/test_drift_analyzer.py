@@ -1570,3 +1570,93 @@ class TestEnvironmentFingerprint:
         assert env["runner_id"] == "armbench"
         assert "platform" in env
         assert env["kernel"] == "6.1"
+
+
+class TestEnvironmentChangeAnnotation:
+    """The shared environment diff, as the ingest path applies it."""
+
+    def _ingest_with_env(self, analyzer, day, environment, runner_id="armbench"):
+        utc_date = f"2026-09-{day:02d}"
+        task_id = f"canary:{runner_id}:throughput-get-v1:{utc_date}"
+        outcome = {
+            "schema_version": 1,
+            "task_id": task_id,
+            "runner_id": runner_id,
+            "state": "completed",
+            "completed_at": f"{utc_date}T12:00:00Z",
+            "result": {"score": 200000.0, "environment": environment},
+            "error": None,
+        }
+        return analyzer.ingest_outcome(
+            task_id=task_id,
+            runner_id=runner_id,
+            outcome=outcome,
+            profile_id="throughput-get-v1",
+            profile_version=1,
+            utc_date=utc_date,
+            environment=environment,
+        )
+
+    def test_intelbench_style_update_names_kernel_glibc_and_microcode(self, tmp_path):
+        _db, _registry, analyzer = _make_env(tmp_path)
+        before = {
+            "provenance_schema_version": 2,
+            "kernel_release": "6.1.170-213.321.amzn2023.x86_64",
+            "glibc_version": "2.34",
+            "cpu_microcode": "0x2b000603",
+            "boot_id": "a",
+            "conductress_revision": "5466d25",
+        }
+        after = dict(before, kernel_release="6.1.189-236.400.amzn2023.x86_64", cpu_microcode="0x2b000685", boot_id="b")
+        self._ingest_with_env(analyzer, 1, before)
+        obs = self._ingest_with_env(analyzer, 2, after)
+        annotation = obs["env_change_annotation"]
+        assert "kernel_release: '6.1.170-213.321.amzn2023.x86_64' -> '6.1.189-236.400.amzn2023.x86_64'" in annotation
+        assert "cpu_microcode: '0x2b000603' -> '0x2b000685'" in annotation
+        assert "boot_id: 'a' -> 'b'" in annotation
+        assert "glibc_version" not in annotation  # unchanged
+
+    def test_schema_upgrade_adds_no_annotation(self, tmp_path):
+        _db, _registry, analyzer = _make_env(tmp_path)
+        v1 = {"provenance_schema_version": 1, "kernel_release": "6.1.170", "conductress_revision": "r"}
+        v2 = dict(v1, provenance_schema_version=2, glibc_version="2.34", cpu_microcode=None, boot_id="a")
+        self._ingest_with_env(analyzer, 1, v1)
+        assert self._ingest_with_env(analyzer, 2, v2)["env_change_annotation"] is None
+        # An ARM microcode None that stays None is no change; a value appearing is.
+        assert self._ingest_with_env(analyzer, 3, dict(v2))["env_change_annotation"] is None
+        assert (
+            "cpu_microcode: None -> '0x1'"
+            in self._ingest_with_env(analyzer, 4, dict(v2, cpu_microcode="0x1"))["env_change_annotation"]
+        )
+
+    def test_service_adds_server_keys_only_for_a_remote_server_host(self, tmp_path):
+        db, registry, analyzer = _make_env(tmp_path, with_profiles=True)
+        service = ControlService(db, registry, 300, canary_profiles=analyzer._canary_profiles)
+        captured = {}
+
+        def fake_ingest(**kwargs):
+            captured.update(kwargs)
+            return None
+
+        service.drift_analyzer.ingest_outcome = fake_ingest
+        envelope = task_envelope("canary:armbench:throughput-get-v1:2026-09-01", runner_id="armbench")
+        envelope["task_class"] = "canary"
+        envelope["canary_id"] = "throughput-get-v1:2026-09-01"
+        service.submit_task(envelope, actor="operator:test")
+        task_id = envelope["task_id"]
+        claim = service.claim_task("armbench", actor="runner:armbench")
+        service.accept_task("armbench", task_id, claim["claim_token"], actor="runner:armbench")
+        outcome = task_outcome(task_id, "armbench")
+        outcome["result"]["environment"] = {"kernel_release": "6.1", "boot_id": "client"}
+        outcome["result"]["server_environment"] = {
+            "same_host": False,
+            "kernel_release": "6.18",
+            "boot_id": "server",
+            "glibc_version": "2.34",
+            "cpu_microcode": None,
+            "host_fingerprint": "ff",
+        }
+        service.record_outcome("armbench", task_id, outcome, actor="runner:armbench")
+        env = captured["environment"]
+        assert env["server_kernel_release"] == "6.18" and env["server_boot_id"] == "server"
+        assert env["kernel_release"] == "6.1"

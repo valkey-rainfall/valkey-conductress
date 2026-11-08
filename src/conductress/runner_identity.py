@@ -23,10 +23,46 @@ from .config import PROJECT_ROOT, RUNNER_CONFIG_PATH
 from .platform import get_local_platform_info
 
 RUNNER_INFO_SCHEMA_VERSION = 1
-PROVENANCE_SCHEMA_VERSION = 1
+# 2: ``environment`` carries glibc_version, cpu_microcode, boot_id,
+# cachecannon_commit and cachecannon_dirty (each may be None), and a result
+# row may carry ``server_environment`` for the host the server ran on.
+PROVENANCE_SCHEMA_VERSION = 2
 _RUNNER_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
 _ALLOWED_CONFIG_KEYS = {"schema_version", "runner_id", "display_name"}
 _UNKNOWN_REVISION = "unknown"
+
+# Environment fields that can move a benchmark result without a code change.
+# Together they form the key of an environment PERIOD (sweep/exporter.py);
+# ``boot_id`` is listed apart because a reboot is only a possible change and
+# is marked more lightly than a package or kernel change.
+PERIOD_FIELDS = ("kernel_release", "glibc_version", "cpu_microcode", "conductress_revision", "cachecannon_commit")
+BOOT_FIELDS = ("boot_id",)
+# Host-level fields read on the server host as well (``server_environment``).
+HOST_FIELDS = (
+    "host_fingerprint",
+    "instance_id",
+    "kernel_release",
+    "machine",
+    "cpu_model",
+    "glibc_version",
+    "cpu_microcode",
+    "boot_id",
+)
+
+# One shell line that prints the server host's environment, one ``key=value``
+# per line, parsed by :func:`parse_remote_environment`. Every read is a local
+# file or getconf; a missing file prints an empty value.
+REMOTE_ENVIRONMENT_COMMAND = (
+    "echo kernel_release=$(uname -r); echo machine=$(uname -m); "
+    "echo boot_id=$(cat /proc/sys/kernel/random/boot_id 2>/dev/null); "
+    "echo machine_id=$(cat /etc/machine-id 2>/dev/null || cat /var/lib/dbus/machine-id 2>/dev/null); "
+    "echo hostname=$(hostname -s 2>/dev/null); "
+    "echo glibc_version=$(getconf GNU_LIBC_VERSION 2>/dev/null | awk '{print $2}'); "
+    "echo cpu_model=$(grep -m1 -E '^(model name|CPU part)' /proc/cpuinfo | cut -d: -f2- | sed 's/^ *//'); "
+    "echo cpu_microcode=$(grep -m1 '^microcode' /proc/cpuinfo | cut -d: -f2 | tr -d ' '); "
+    "echo instance_id=$(cat /sys/devices/virtual/dmi/id/board_asset_tag 2>/dev/null "
+    "|| cat /sys/devices/virtual/dmi/id/product_uuid 2>/dev/null || cat /sys/hypervisor/uuid 2>/dev/null)"
+)
 
 
 @dataclass(frozen=True)
@@ -116,19 +152,166 @@ def _instance_id() -> Optional[str]:
     )
 
 
-def _cpu_model() -> str:
+def _cpuinfo_fields(path: Path = Path("/proc/cpuinfo")) -> dict[str, str]:
+    """The first processor's ``/proc/cpuinfo`` fields, lower-cased keys."""
     try:
-        lines = Path("/proc/cpuinfo").read_text(encoding="utf-8").splitlines()
+        lines = path.read_text(encoding="utf-8").splitlines()
     except OSError:
-        return "unknown"
-
+        return {}
     fields: dict[str, str] = {}
     for line in lines:
         if ":" not in line:
             continue
         key, value = line.split(":", 1)
         fields.setdefault(key.strip().lower(), value.strip())
+    return fields
+
+
+def _cpu_model(fields: Optional[dict[str, str]] = None) -> str:
+    fields = _cpuinfo_fields() if fields is None else fields
     return fields.get("model name") or fields.get("cpu part") or fields.get("processor") or "unknown"
+
+
+def _cpu_microcode(fields: Optional[dict[str, str]] = None) -> Optional[str]:
+    """The CPU microcode revision (``0x2b000685``), or None where the platform does not expose it.
+
+    x86 prints it in ``/proc/cpuinfo``; Graviton guests have no ``microcode``
+    line and no sysfs node, so None there means "not available", not a value
+    (a diff treats None -> None as no change).
+    """
+    fields = _cpuinfo_fields() if fields is None else fields
+    value = fields.get("microcode")
+    if value:
+        return value
+    return _read_first([Path("/sys/devices/system/cpu/cpu0/microcode/version")])
+
+
+def _glibc_version() -> Optional[str]:
+    """The C library version this process runs with (``2.34``).
+
+    ``gnu_get_libc_version`` is asked directly through ctypes: the process is
+    already linked against the host glibc, so no library lookup or subprocess
+    is needed. A non-glibc libc falls back to ``platform.libc_ver``; None when
+    neither knows.
+    """
+    try:
+        import ctypes
+
+        function = ctypes.CDLL(None).gnu_get_libc_version
+        function.restype = ctypes.c_char_p
+        value = function()
+        if value:
+            return value.decode("ascii", "replace")
+    except (AttributeError, OSError, ValueError):
+        pass
+    return platform.libc_ver()[1] or None
+
+
+def _boot_id(path: Path = Path("/proc/sys/kernel/random/boot_id")) -> Optional[str]:
+    """The kernel's boot id (a new UUID at every boot); None off Linux."""
+    return _read_first([path])
+
+
+@lru_cache(maxsize=8)
+def _cachecannon_identity(binary: str, mtime_ns: int) -> dict[str, Any]:
+    """Commit and dirty flag of the cachecannon checkout a binary was built from.
+
+    The binary has no commit in ``--version``, so the checkout above
+    ``target/release/`` is asked. ``mtime_ns`` is part of the cache key so a
+    rebuilt binary at the same path is read again. A binary outside a git
+    checkout gets a content hash instead, so two copies can still be told
+    apart.
+    """
+    path = Path(binary).expanduser()
+    checkout = path.parent.parent.parent if path.parent.name in ("release", "debug") else path.parent
+    result: dict[str, Any] = {"cachecannon_commit": None, "cachecannon_dirty": None}
+    try:
+        head = subprocess.run(
+            ["git", "-C", str(checkout), "rev-parse", "HEAD"], check=False, capture_output=True, text=True, timeout=2
+        )
+        if head.returncode == 0 and head.stdout.strip():
+            result["cachecannon_commit"] = head.stdout.strip()
+            status = subprocess.run(
+                ["git", "-C", str(checkout), "status", "--porcelain", "--untracked-files=no"],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            result["cachecannon_dirty"] = bool(status.stdout.strip()) if status.returncode == 0 else None
+            return result
+    except (OSError, subprocess.SubprocessError):
+        pass
+    try:
+        result["cachecannon_sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()[:16]
+    except OSError:
+        pass
+    return result
+
+
+def cachecannon_identity(binary: Optional[str]) -> dict[str, Any]:
+    """Per-task cachecannon provenance for the binary a task names (None: no cachecannon)."""
+    if not binary:
+        return {"cachecannon_commit": None, "cachecannon_dirty": None}
+    try:
+        mtime_ns = Path(binary).expanduser().stat().st_mtime_ns
+    except OSError:
+        return {"cachecannon_commit": None, "cachecannon_dirty": None}
+    return dict(_cachecannon_identity(str(binary), mtime_ns))
+
+
+def parse_remote_environment(text: str) -> dict[str, Any]:
+    """Parse the output of :data:`REMOTE_ENVIRONMENT_COMMAND` into a host environment block.
+
+    Pure, so it is testable without a host. Empty values become None; the
+    fingerprint is derived the same way as the local one (instance id,
+    machine id, hostname, platform label is unknown remotely so the kernel
+    machine string stands in). A truncated output yields None fields, never
+    an exception.
+    """
+    raw: dict[str, str] = {}
+    for line in text.splitlines():
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        raw[key.strip()] = value.strip()
+
+    def field(name: str) -> Optional[str]:
+        return raw.get(name) or None
+
+    env: dict[str, Any] = {
+        "host_fingerprint": _host_fingerprint(
+            field("instance_id"), field("machine") or "", field("hostname") or "", machine_id=field("machine_id") or ""
+        ),
+        "instance_id": field("instance_id"),
+        "kernel_release": field("kernel_release"),
+        "machine": field("machine"),
+        "cpu_model": field("cpu_model") or "unknown",
+        "glibc_version": field("glibc_version"),
+        "cpu_microcode": field("cpu_microcode"),
+        "boot_id": field("boot_id"),
+    }
+    return env
+
+
+def environment_for_period(row: dict[str, Any]) -> dict[str, Any]:
+    """The reduced environment of a result row that an environment PERIOD is keyed on.
+
+    Client-host fields under their own names, the server host's under
+    ``server_`` when the row carries a different server host, plus the
+    provenance schema version (a field a row's schema did not have is not a
+    change) and ``cachecannon_dirty`` (label material, not key material).
+    """
+    environment = row.get("environment") or {}
+    reduced: dict[str, Any] = {"provenance_schema_version": row.get("provenance_schema_version")}
+    for key in PERIOD_FIELDS + BOOT_FIELDS:
+        reduced[key] = environment.get(key)
+    reduced["cachecannon_dirty"] = environment.get("cachecannon_dirty")
+    server = row.get("server_environment")
+    if isinstance(server, dict) and not server.get("same_host", False):
+        for key in ("kernel_release", "glibc_version", "cpu_microcode", "boot_id"):
+            reduced[f"server_{key}"] = server.get(key)
+    return reduced
 
 
 def _conductress_revision() -> str:
@@ -150,8 +333,11 @@ def _conductress_revision() -> str:
     return revision if result.returncode == 0 and revision else _UNKNOWN_REVISION
 
 
-def _host_fingerprint(instance_id: Optional[str], platform_label: str, hostname: str) -> str:
-    machine_id = _read_first([Path("/etc/machine-id"), Path("/var/lib/dbus/machine-id")]) or ""
+def _host_fingerprint(
+    instance_id: Optional[str], platform_label: str, hostname: str, machine_id: Optional[str] = None
+) -> str:
+    if machine_id is None:
+        machine_id = _read_first([Path("/etc/machine-id"), Path("/var/lib/dbus/machine-id")]) or ""
     material = "\0".join((instance_id or "", machine_id, hostname, platform_label))
     return hashlib.sha256(material.encode("utf-8")).hexdigest()[:16]
 
@@ -164,6 +350,11 @@ def get_runner_info() -> dict[str, Any]:
     platform_id, platform_label, aliases = get_local_platform_info()
     hostname = _short_hostname()
     instance_id = _instance_id()
+    cpuinfo = _cpuinfo_fields()
+    # Cached for the process lifetime on purpose: kernel, boot id, glibc and
+    # microcode cannot change under a running runner (a reboot ends the
+    # process, a package update takes effect for new processes only), so the
+    # cached values are exactly what this runner process runs with.
     return {
         "schema_version": RUNNER_INFO_SCHEMA_VERSION,
         "runner_id": config.runner_id,
@@ -179,22 +370,31 @@ def get_runner_info() -> dict[str, Any]:
             "instance_id": instance_id,
             "kernel_release": platform.release(),
             "machine": platform.machine(),
-            "cpu_model": _cpu_model(),
+            "cpu_model": _cpu_model(cpuinfo),
             "conductress_revision": _conductress_revision(),
+            "glibc_version": _glibc_version(),
+            "cpu_microcode": _cpu_microcode(cpuinfo),
+            "boot_id": _boot_id(),
         },
     }
 
 
-@lru_cache(maxsize=1)
-def get_result_provenance() -> dict[str, Any]:
-    """Return additive top-level fields shared by every result writer."""
+def get_result_provenance(cachecannon_binary: Optional[str] = None) -> dict[str, Any]:
+    """Return additive top-level fields shared by every result writer.
+
+    The host part is cached; the cachecannon part depends on the binary the
+    task names (``cachecannon_binary``), so it is resolved per call and cached
+    per binary path and mtime.
+    """
 
     info = get_runner_info()
+    environment = dict(info["environment"])
+    environment.update(cachecannon_identity(cachecannon_binary))
     return {
         "provenance_schema_version": PROVENANCE_SCHEMA_VERSION,
         "runner_id": info["runner_id"],
         "platform": info["platform"]["label"],
-        "environment": dict(info["environment"]),
+        "environment": environment,
     }
 
 
@@ -203,4 +403,4 @@ def clear_identity_caches() -> None:
 
     get_runner_config.cache_clear()
     get_runner_info.cache_clear()
-    get_result_provenance.cache_clear()
+    _cachecannon_identity.cache_clear()
