@@ -400,3 +400,42 @@ def test_record_outcome_publishes_results_jsonl_and_static_json(control_env, tmp
     assert published["outcome"]["result"]["score"] == 123.0
     lines = results_jsonl.read_text(encoding="utf-8").strip().splitlines()
     assert json.loads(lines[-1])["task_id"] == "task-1"
+
+
+def test_canary_dir_alone_publishes_canary_files_but_no_task_records(control_env, tmp_path):
+    # A deployment that sets only PUBLISHED_CANARY_DIR publishes the canary
+    # status and nothing else: task records can carry private build and host
+    # details, the canary status cannot.
+    canary_root = tmp_path / "public"
+    service = ControlService(
+        control_env["database"],
+        control_env["registry"],
+        control_env["config"].claim_lease_seconds,
+        canary_profiles=control_env["canary_profiles"],
+        published_canary_dir=canary_root,
+    )
+    service.submit_task(task_envelope("task-1"), actor="operator:test")
+    claim = service.claim_task("armbench", actor="runner:armbench")
+    service.accept_task("armbench", "task-1", claim["claim_token"], actor="runner:armbench")
+    service.record_outcome("armbench", "task-1", task_outcome("task-1"), actor="runner:armbench")
+    service.publish_canary_status()
+
+    assert (canary_root / "canary" / "fleet.json").exists()
+    assert (canary_root / "canary" / "armbench.json").exists()
+    assert not (canary_root / "tasks").exists()
+    assert not list(tmp_path.rglob("task-1.json"))
+
+
+def test_published_canary_dir_falls_back_to_tasks_dir(monkeypatch, tmp_path):
+    from conductress.control.config import ControlConfig
+
+    monkeypatch.setenv("CONTROL_DB_PATH", str(tmp_path / "control.db"))
+    for name in ("PUBLISHED_TASKS_DIR", "PUBLISHED_CANARY_DIR"):
+        monkeypatch.delenv(name, raising=False)
+    assert ControlConfig.from_env().published_canary_dir is None
+    monkeypatch.setenv("PUBLISHED_TASKS_DIR", str(tmp_path / "www"))
+    assert ControlConfig.from_env().published_canary_dir == tmp_path / "www"
+    monkeypatch.setenv("PUBLISHED_CANARY_DIR", str(tmp_path / "canary-only"))
+    config = ControlConfig.from_env()
+    assert config.published_canary_dir == tmp_path / "canary-only"
+    assert config.published_tasks_dir == tmp_path / "www"

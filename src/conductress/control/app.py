@@ -188,6 +188,7 @@ def create_app(
         canary_notification_url=config.canary_notification_url,
         canary_notify_warning=config.canary_notify_warning,
         published_tasks_dir=config.published_tasks_dir,
+        published_canary_dir=config.published_canary_dir,
         results_jsonl_path=config.results_jsonl_path,
     )
     service.expire_stale_claims(actor="system:startup")
