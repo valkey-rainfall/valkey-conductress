@@ -225,6 +225,46 @@ A trimmed or reduced outcome carries an `outcome_delivery` object on the result:
 
 `reason` starts with `preflight:` when the client budget trimmed it and `rejected:` when the server did. The runner also keeps the last downgrade in its status as `fleet_control.last_outcome_downgrade` (`stage` is `trimmed`, `reduced`, `failed` or `dropped`), shown by `conductress fleet status --json` and as a `Last outcome:` line in `conductress fleet show <runner>`.
 
+## Archiving a runner's canary history
+
+The drift analyzer counts and windows a runner's observations by `runner_id`,
+so a series restarts when its history gets another id. When a host's
+environment changes so much that later canaries cannot be judged against the
+earlier ones (intelbench, 2026-11-06), the operator archives the history:
+
+```
+sudo systemctl stop conductress-control.service
+conductress-control archive-runner --runner intelbench \
+    --archive-id intelbench-pre-2026-11-07 --until 2026-11-06 \
+    --note "kernel 6.1.170 -> 6.1.189, glibc, microcode 0x2b000685; canary +12.3%" [--dry-run]
+# paste the printed entry into fleet.json
+sudo systemctl start conductress-control.service
+```
+
+It refuses while the service is active (an ingest could race the rename),
+takes a backup with SQLite's online backup first (`<db>.pre-archive-<id>.db`,
+never overwritten), and in one transaction renames the runner's
+`canary_observations` and `canary_schedule` rows with `utc_date <= until` and
+its `canary_calibration_reports` row to the archive id, resets the rolling
+statistics of live observations after the cut (they were computed against the
+old history; the series now reads as a fresh start, ordinal 1, 2, ...), and
+writes one `runner.archive` audit entry. Nothing is deleted; `tasks`,
+`runner_status`, the audit log and result blobs keep the live id. The archive
+id is a series identity, not a host: it has no token and no status file.
+
+The printed manifest entry is `enabled: false` with `archived: true`,
+`archive_of`, `archived_until` and `archive_note`, and no platform aliases, so
+the scheduler creates nothing for it, every runner route answers
+`RUNNER_ARCHIVED`, and `--platform` keeps resolving to the live runner.
+`GET /api/v1/canary/status` lists archives after the live runners with those
+fields, and each live runner carries an `archives` list; `conductress canary
+status` shows them. The runner-side half of the same decision is
+`conductress sweep close-generation` (configuration.md, "Series generations").
+
+Rollback: stop the service, restore the backup (`sqlite3 control.db ".restore
+'<backup>'"`), remove the manifest entry, start. Observations ingested in
+between are in the tasks' outcomes and can be re-ingested.
+
 ## Persistence and backup
 
 SQLite uses WAL mode, foreign keys, explicit `BEGIN IMMEDIATE` claim transactions, and a five-second busy timeout. Back up with SQLite's online backup command rather than copying only the main file while WAL files are active:

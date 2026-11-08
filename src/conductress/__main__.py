@@ -123,6 +123,14 @@ def main() -> None:
         help="Archived epoch to regenerate (only 'v1' is supported)",
     )
     export_archived_parser.add_argument(
+        "--generation",
+        default=None,
+        help=(
+            "Export a closed v3 generation instead of an archived epoch: the id printed by "
+            "'sweep close-generation' (its cut date, e.g. 2026-11-06)"
+        ),
+    )
+    export_archived_parser.add_argument(
         "--repo",
         type=str,
         default=None,
@@ -192,6 +200,40 @@ def main() -> None:
         "--force",
         action="store_true",
         help="Reset even if the runner service appears active (unsafe: the runner may be mid-task on this series)",
+    )
+
+    close_gen_parser = sweep_sub.add_parser(
+        "close-generation",
+        help=(
+            "Manual: close this platform's live v3 generation at a cut time. Points from tasks that started "
+            "before the cut move to a read-only archived generation; tasks that started between the cut and "
+            "--resume are discarded (listed in excluded_tasks.json); the live series restart from the cut."
+        ),
+    )
+    close_gen_parser.add_argument("--epoch", default="v3", help="Epoch of the series (only 'v3' is supported)")
+    close_gen_parser.add_argument(
+        "--cut",
+        required=True,
+        help="UTC instant of the cut, ISO 8601 (e.g. 2026-11-06T16:14:23Z); tasks started before it are archived",
+    )
+    close_gen_parser.add_argument(
+        "--resume",
+        default=None,
+        help="UTC instant from which tasks are live again (default: the cut); tasks started in between are discarded",
+    )
+    close_gen_parser.add_argument("--label", required=True, help="What changed, shown on the dashboard")
+    close_gen_parser.add_argument(
+        "--reason", required=True, help="Why the generation is closed (e.g. the canary alarm)"
+    )
+    close_gen_parser.add_argument(
+        "--workloads",
+        default=None,
+        help="Comma-separated series labels to split (default: every v3 throughput and latency series)",
+    )
+    close_gen_parser.add_argument("--by", default="operator", help="Who decided (recorded in the generation entry)")
+    close_gen_parser.add_argument("--dry-run", action="store_true", help="Print what would happen; touch nothing")
+    close_gen_parser.add_argument(
+        "--force", action="store_true", help="Run even if the runner service appears active (unsafe)"
     )
 
     args, remaining = parser.parse_known_args()
@@ -475,15 +517,57 @@ def main() -> None:
 
             repo_path = Path(args.repo) if getattr(args, "repo", None) else None
             output_dir = Path(args.output_dir) if getattr(args, "output_dir", None) else None
+            what = f"generation {args.generation}" if args.generation else f"{args.epoch} epoch"
             try:
-                written = export_archived_epoch(args.epoch, repo_path=repo_path, output_dir=output_dir)
+                if args.generation:
+                    from conductress.sweep.archived_export import export_archived_generation
+
+                    written = export_archived_generation(args.generation, repo_path=repo_path, output_dir=output_dir)
+                else:
+                    written = export_archived_epoch(args.epoch, repo_path=repo_path, output_dir=output_dir)
             except ValueError as exc:
                 print(f"error: {exc}")
                 sys.exit(2)
             if written == 0:
-                print(f"No {args.epoch} state found; nothing exported.")
+                print(f"No state found for the {what}; nothing exported.")
                 sys.exit(1)
-            print(f"Exported {written} {args.epoch} series to the publish export dir.")
+            print(f"Exported {written} series of the {what} to the publish export dir.")
+
+        elif args.sweep_command == "close-generation":
+            from datetime import datetime, timezone
+
+            from conductress.sweep.generations import close_generation
+
+            def _utc(text):
+                value = datetime.fromisoformat(text.replace("Z", "+00:00"))
+                return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
+
+            if args.epoch != "v3":
+                print(f"error: only the v3 epoch is supported, got {args.epoch!r}")
+                sys.exit(2)
+            try:
+                close_result = close_generation(
+                    cut=_utc(args.cut),
+                    resume=_utc(args.resume) if args.resume else None,
+                    label=args.label,
+                    reason=args.reason,
+                    recorded_by=args.by,
+                    workloads=[w.strip() for w in args.workloads.split(",") if w.strip()] if args.workloads else None,
+                    dry_run=args.dry_run,
+                    force=args.force,
+                )
+            except ValueError as exc:
+                print(f"error: {exc}")
+                sys.exit(2)
+            for line in close_result.summary_lines():
+                print(line)
+            if close_result.refused_reason:
+                sys.exit(1)
+            if not args.dry_run:
+                print(
+                    f"Next: 'conductress sweep export-archived --generation {close_result.generation_id}' "
+                    "to publish the archived files, then start the runner service."
+                )
 
         elif args.sweep_command == "status":
             state = SweepState.load(SWEEP_STATE_FILE)

@@ -5,7 +5,7 @@ import logging
 import shutil
 import tempfile
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable, Iterable
+from typing import TYPE_CHECKING, Callable, Iterable, Optional
 
 from conductress import config
 from conductress.config import engine_repo_slug, should_profile_internals
@@ -167,13 +167,15 @@ class DashboardPublisher:
         return path.with_name(f"{path.stem}.epoch-{epoch_id}{path.suffix}")
 
     @staticmethod
-    def _stamp_epoch(path: Path, epoch_id: str) -> None:
-        """Stamp exported JSON with its epoch before publication."""
+    def _stamp_epoch(path: Path, epoch_id: str, generation: Optional[str] = None) -> None:
+        """Stamp exported JSON with its epoch (and closed generation, if any) before publication."""
         if not path.exists():
             return
         payload = json.loads(path.read_text())
         metadata = payload.setdefault("metadata", {})
         metadata["epoch"] = epoch_id
+        if generation is not None:
+            metadata["generation"] = generation
         path.write_text(json.dumps(payload, indent=2))
 
     def _promote_epoch_stage(self, stage: Path, epoch_id: str) -> None:
@@ -194,6 +196,7 @@ class DashboardPublisher:
             export_notable,
             export_perf_metrics,
         )
+        from conductress.sweep.generations import load_generations
 
         try:
             epoch_ids = list(dict.fromkeys(e for c in self.coordinators for e in self._coord_epochs(c)))
@@ -272,12 +275,18 @@ class DashboardPublisher:
                 self._stamp_epoch(notable, epoch_id)
 
                 workloads = list(dict.fromkeys((c.workload_id, c.metric_id) for c in epoch_coords))
+                # This platform's closed generations: their archived files
+                # already sit in the export dir (written once by
+                # ``sweep export-archived --generation``) and are re-synced as
+                # is; the live manifest only has to advertise them.
+                generations = [g for g in load_generations() if g.get("epoch", "v3") == epoch_id]
                 export_manifest(
                     self._export_dir,
                     platforms=["amd64", "arm64", "graviton4", "intel"],
                     workloads=workloads,
                     epoch_id=epoch_id,
                     epochs=epoch_defs,
+                    generations=generations,
                 )
 
             self._refresh_archived_manifests(epoch_defs)

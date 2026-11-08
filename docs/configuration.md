@@ -254,6 +254,55 @@ sudo systemctl start conductress.service
 or, for a memory definition change, `--all-memory` and `--all-memory --engine
 redis` in place of the two `--workload` lines.
 
+### Series generations
+
+An epoch names the measurement protocol and is the same on every platform. A
+GENERATION is per platform: it closes a platform's live v3 history at a point
+in time when the host's environment changed so much that later points cannot
+share a chart line with earlier ones (intelbench, 2026-11-06: kernel, glibc
+and microcode update, canary +12.3%). Closing a generation is a MANUAL
+decision taken after such a change was confirmed, never an automatic step; a
+reboot or a small update is only marked, not split.
+
+A point belongs to the generation of the task that produced it, by the task's
+START time (``end_time - observed_duration_sec`` of its result row): a task
+that started before the cut measured the old environment for its whole run.
+Tasks that started between the cut and the resume time (the host was being
+updated or rebooted) are discarded: dropped from both generations and listed
+in `sweep_data/excluded_tasks.json` with the reason. Their raw result rows in
+`results/output.jsonl` are not touched by this command. Every coordinator and
+exporter skips a task on that list, so a replayed or re-exported result can
+never bring a discarded task back. Memory series are not split (bytes per
+key do not depend on kernel, glibc or microcode).
+
+The procedure, on the runner, with the service stopped:
+
+```
+conductress sweep pause "*"                 # earlier, between tasks
+sudo systemctl stop conductress.service
+conductress sweep close-generation --epoch v3 \
+    --cut 2026-11-06T16:14:23Z --resume 2026-11-06T18:21:58Z \
+    --label "kernel 6.1.170 -> 6.1.189, glibc, microcode 0x2b000685" \
+    --reason "canary alarm +12.3% on 2026-11-07" --by rain [--dry-run]
+conductress sweep export-archived --generation 2026-11-06
+sudo systemctl start conductress.service
+conductress sweep resume
+```
+
+`close-generation` backs up every live state file (`<file>.bak-<UTC>`),
+writes the archived points to `sweep_data/v3/generations/<cut date>/`, keeps
+the live points in place, relocates queued cells of the split series like
+`reset-series` does, and appends the generation to `sweep_data/generations.json`
+(id, cut, resume, label, reason, workloads, number of excluded tasks, who and
+when). `export-archived --generation` loads the archived state once and writes
+`series-<platform>-<workload>-<metric>.epoch-v3.gen-<id>.json`, the notable
+feed and `manifest-<platform>.epoch-v3.gen-<id>.json` into the publish export
+dir, where the next publish re-syncs them. The live manifest lists the
+platform's closed generations under `generations`, so the dashboard can offer
+their read-only history next to the live line. The runner service never loads
+archived state. The same event on the data host is handled by
+`conductress-control archive-runner` (see control-service.md).
+
 ### Memory series: settled sample, deferred backfill
 
 The memory series sample each cell **settled**: after the populate, the memory

@@ -255,10 +255,23 @@ class BaseSweepCoordinator(ABC):
         """Called on every task completion. Filters to own tasks."""
         if not self._is_my_task(task):
             return
+        from conductress.sweep.generations import is_excluded  # local: generations imports this module's subclasses
+
+        if is_excluded(task.task_id):
+            # A discarded task (see sweep/generations.py): its result must never
+            # become a point, however it is replayed.
+            logger.warning(
+                "Ignoring excluded sweep task %s for commit %s", task.task_id, getattr(task, "sweep_commit", "?")[:8]
+            )
+            return
         result = self._extract_result(task)
         if result:
             value, cv, reps = result
             self.record_result(task.sweep_commit, value, cv, reps)  # type: ignore[attr-defined]
+            point = self.state.points.get(task.sweep_commit)  # type: ignore[attr-defined]
+            if point is not None:
+                point.task_id = task.task_id
+                self.state.save(self.state_file)
             # Extract perf counters if available
             perf = self._extract_perf_counters(task)  # pylint: disable=assignment-from-none
             if perf:
