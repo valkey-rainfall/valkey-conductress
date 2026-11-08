@@ -6,6 +6,8 @@ and human output, and no state mutation.
 """
 
 import json
+import os
+import stat
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -1143,6 +1145,20 @@ class TestCanaryAlarmSurfacing:
         fleet = json.loads(fleet_file.read_text())
         assert [r["runner_id"] for r in fleet["runners"]] == ["armbench", "g4bench"]
         assert not list((tmp_path / "published" / "canary").glob("*.tmp"))
+
+    def test_static_files_are_world_readable_under_a_private_umask(self, canary_env, tmp_path):
+        # The shipped unit runs the service with UMask=0077; the web server
+        # still has to read the published files and traverse their directory.
+        previous = os.umask(0o077)
+        try:
+            service, _notices = self._service_with_hooks(canary_env, tmp_path)
+            self._ingest(service, "2026-09-01", 200000.0)
+        finally:
+            os.umask(previous)
+        canary_dir = tmp_path / "published" / "canary"
+        assert stat.S_IMODE(canary_dir.stat().st_mode) == 0o755
+        assert stat.S_IMODE((canary_dir / "armbench.json").stat().st_mode) == 0o644
+        assert stat.S_IMODE((canary_dir / "fleet.json").stat().st_mode) == 0o644
 
     def test_alarm_and_environment_change_post_one_notice_each(self, canary_env, tmp_path):
         service, notices = self._service_with_hooks(
