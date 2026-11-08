@@ -24,6 +24,8 @@ class ControlConfig:
     audit_jsonl_path: Path
     users_path: Optional[Path] = None
     notification_url: Optional[str] = None
+    canary_notification_url: Optional[str] = None
+    canary_notify_warning: bool = False
     published_tasks_dir: Optional[Path] = None
     results_jsonl_path: Optional[Path] = None
     github_token: Optional[str] = None
@@ -47,6 +49,8 @@ class ControlConfig:
             audit_jsonl_path=Path(os.environ.get("AUDIT_JSONL_PATH", "/var/log/conductress-control/audit.jsonl")),
             users_path=Path(users_value) if users_value else None,
             notification_url=os.environ.get("NOTIFICATION_URL") or None,
+            canary_notification_url=os.environ.get("CANARY_NOTIFICATION_URL") or None,
+            canary_notify_warning=os.environ.get("CANARY_NOTIFY_WARNING", "").lower() in {"1", "true", "yes"},
             published_tasks_dir=Path(published_value) if published_value else None,
             results_jsonl_path=Path(results_value) if results_value else None,
             github_token=github_token,

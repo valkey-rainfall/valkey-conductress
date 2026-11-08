@@ -185,10 +185,13 @@ def create_app(
         user_directory=user_directory,
         provenance_gate=provenance_gate,
         notification_url=config.notification_url,
+        canary_notification_url=config.canary_notification_url,
+        canary_notify_warning=config.canary_notify_warning,
         published_tasks_dir=config.published_tasks_dir,
         results_jsonl_path=config.results_jsonl_path,
     )
     service.expire_stale_claims(actor="system:startup")
+    service.publish_canary_status()
     scheduler = CanaryScheduler(database, registry, canary_profiles)
     scheduler.tick()
 
