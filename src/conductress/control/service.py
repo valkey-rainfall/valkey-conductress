@@ -988,7 +988,10 @@ class ControlService:
         if runner_id:
             runners = [self.registry.get_runner(runner_id, require_enabled=False)]
         else:
+            # Enabled runners first, then every archive (a closed series of a
+            # live runner stays readable, it just never gets new observations).
             runners = self.registry.list_runners(enabled_only=True)
+            runners += [r for r in self.registry.list_runners() if r.get("archived")]
 
         result = []
         for runner in runners:
@@ -1001,7 +1004,21 @@ class ControlService:
                 "platform": runner.get("platform"),
                 "enabled": runner.get("enabled", False),
                 "canary_profile": profile_id,
+                "archived": bool(runner.get("archived")),
             }
+            if runner.get("archived"):
+                entry["archive_of"] = runner.get("archive_of")
+                entry["archived_until"] = runner.get("archived_until")
+                entry["archive_note"] = runner.get("archive_note")
+            else:
+                entry["archives"] = [
+                    {
+                        "runner_id": a["runner_id"],
+                        "archived_until": a.get("archived_until"),
+                        "archive_note": a.get("archive_note"),
+                    }
+                    for a in self.registry.archives_of(rid)
+                ]
 
             if not profile_id:
                 entry["profile"] = None

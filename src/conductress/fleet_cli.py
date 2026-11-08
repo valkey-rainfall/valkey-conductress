@@ -79,6 +79,10 @@ def _age(value: Optional[str]) -> str:
 
 
 def _runner_state(runner: dict[str, Any]) -> str:
+    if runner.get("archived"):
+        return "archived"
+    if not runner.get("enabled", True):
+        return "disabled"
     updated = _parse_time(runner.get("status_updated_at"))
     ttl = runner.get("status_ttl_seconds", 900)
     if updated is None or (datetime.now(timezone.utc) - updated).total_seconds() > ttl:
@@ -287,7 +291,7 @@ def _print_canary_fleet_summary(runners: list[dict[str, Any]]) -> None:
         rid = r.get("runner_id", "?")[:12]
         profile_id = (r.get("canary_profile") or "-")[:18]
         series = r.get("series") or {}
-        phase = series.get("phase", "-")[:14]
+        phase = ("archived" if r.get("archived") else series.get("phase", "-"))[:14]
         progress = (series.get("progress") or "-")[:7]
         latest = r.get("latest_observation")
         if latest:
@@ -308,6 +312,14 @@ def _print_canary_runner_detail(runner: dict[str, Any]) -> None:
     print(f"Runner:      {rid} ({runner.get('display_name', '?')})")
     print(f"Platform:    {runner.get('platform', '?')}")
     print(f"Enabled:     {'yes' if runner.get('enabled') else 'no'}")
+    if runner.get("archived"):
+        print(f"Archive of:  {runner.get('archive_of', '?')} until {runner.get('archived_until', '?')} (read-only)")
+        if runner.get("archive_note"):
+            print(f"Note:        {runner['archive_note']}")
+    for archive in runner.get("archives") or []:
+        print(
+            f"Archive:     {archive.get('runner_id')} until {archive.get('archived_until', '?')}: {archive.get('archive_note') or '-'}"
+        )
 
     profile = runner.get("profile")
     if not profile:

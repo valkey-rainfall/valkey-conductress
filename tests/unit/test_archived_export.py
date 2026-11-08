@@ -90,3 +90,77 @@ class TestExportArchivedEpoch:
         assert data["epoch"] == "v1"
         assert [e["id"] for e in data["epochs"]] == ["v3", "v1"]
         assert {e["id"]: e["archived"] for e in data["epochs"]} == {"v3": False, "v1": True}
+
+
+class TestExportArchivedGeneration:
+    def _rig(self, tmp_path):
+        from conductress.sweep import generations as gen
+
+        state_dir = tmp_path / "v3"
+        gen_dir = state_dir / "generations" / "2026-11-06"
+        gen_dir.mkdir(parents=True)
+        state = SweepState(merge_commits=["a", "b"], commit_dates={"a": "2026-10-01", "b": "2026-10-02"})
+        state.points["a"] = BenchmarkPoint(
+            commit="a", date="2026-10-01", value=700_000, cv=1.0, reps=3, status=PointStatus.COMPLETED
+        )
+        # The canonical v3 GET series label.
+        state.save(gen_dir / "state_cachecannon-v3_get-k16-v16-t7-p10.json")
+        generations_file = tmp_path / "generations.json"
+        gen.save_generations(
+            [
+                {
+                    "id": "2026-11-06",
+                    "epoch": "v3",
+                    "until": "2026-11-06T16:14:23Z",
+                    "label": "OS update",
+                    "excluded_tasks": 6,
+                }
+            ],
+            generations_file,
+        )
+        return state_dir, gen_dir, generations_file
+
+    def test_unknown_generation_or_missing_dir_rejected(self, tmp_path):
+        from conductress.sweep import generations as gen
+        from conductress.sweep.archived_export import export_archived_generation
+
+        generations_file = tmp_path / "generations.json"
+        with pytest.raises(ValueError, match="not recorded"):
+            export_archived_generation("2026-01-01", output_dir=tmp_path, generations_file=generations_file)
+        gen.save_generations([{"id": "2026-01-01", "epoch": "v3"}], generations_file)
+        with pytest.raises(ValueError, match="does not exist"):
+            export_archived_generation(
+                "2026-01-01", output_dir=tmp_path, state_dir=tmp_path / "v3", generations_file=generations_file
+            )
+
+    def test_exports_generation_files_beside_the_live_names(self, tmp_path):
+        from conductress.sweep.archived_export import export_archived_generation
+
+        state_dir, _gen_dir, generations_file = self._rig(tmp_path)
+        out_dir = tmp_path / "export"
+        with (
+            patch("conductress.sweep.coordinator_v3.V3_STATE_DIR", state_dir),
+            patch("conductress.config.SWEEP_ENGINES", []),
+            patch("conductress.publisher.detect_platform", return_value=("intel", "Intel")),
+        ):
+            written = export_archived_generation(
+                "2026-11-06",
+                repo_path=tmp_path / "valkey",
+                output_dir=out_dir,
+                state_dir=state_dir,
+                generations_file=generations_file,
+            )
+        assert written == 1
+        series = out_dir / "series-intel-get-k16-v16-t7-p10-throughput.epoch-v3.gen-2026-11-06.json"
+        assert series.exists()
+        payload = json.loads(series.read_text())
+        assert payload["metadata"]["epoch"] == "v3" and payload["metadata"]["generation"] == "2026-11-06"
+        assert [p["commit"] for p in payload["points"]] == ["a"]
+        # No live file was written or touched.
+        assert not (out_dir / "series-intel-get-k16-v16-t7-p10-throughput.epoch-v3.json").exists()
+        notable = out_dir / "notable-intel.epoch-v3.gen-2026-11-06.json"
+        assert notable.exists()
+        manifest = json.loads((out_dir / "manifest-intel.epoch-v3.gen-2026-11-06.json").read_text())
+        assert manifest["generation"]["id"] == "2026-11-06" and manifest["epoch"] == "v3"
+        assert manifest["generations"][0]["label"] == "OS update"
+        assert ("get-k16-v16-t7-p10") in manifest["throughput_workloads"]

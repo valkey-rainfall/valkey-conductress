@@ -21,7 +21,11 @@
           "platform_aliases": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
           "enabled": {"type": "boolean"},
           "canary_profile": {"type": ["string", "null"]},
-          "status_ttl_seconds": {"type": "integer", "minimum": 1}
+          "status_ttl_seconds": {"type": "integer", "minimum": 1},
+          "archived": {"type": "boolean"},
+          "archive_of": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"},
+          "archived_until": {"type": "string", "format": "date"},
+          "archive_note": {"type": "string"}
         }
       }
     }

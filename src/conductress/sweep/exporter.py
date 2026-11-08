@@ -1033,12 +1033,20 @@ def export_manifest(
     workloads: list[tuple[str, str]],
     epoch_id: str = "v1",
     epochs: Optional[list[dict[str, str]]] = None,
+    generations: Optional[list[dict[str, Any]]] = None,
+    generation: Optional[dict[str, Any]] = None,
 ) -> None:
     """Write a per-platform manifest for one measurement epoch.
 
     The v1 filename remains unchanged for backward compatibility.  v2+
     manifests receive `.epoch-<id>` and every manifest advertises the epochs
     available in the same publication batch.
+
+    ``generations`` lists this platform's closed series generations (see
+    ``sweep/generations.py``) so the dashboard can offer their read-only
+    history; a live manifest with none carries an empty list.  ``generation``
+    marks the manifest of one closed generation itself: the file gets a
+    ``.gen-<id>`` suffix and the entry is stored under ``generation``.
     """
     from conductress.publisher import detect_platform
 
@@ -1070,7 +1078,13 @@ def export_manifest(
         ]
         + PERF_GROUPS
         + PER_THREAD_PERF_GROUPS,
+        "generations": list(generations or []),
     }
     output_dir.mkdir(parents=True, exist_ok=True)
     filename = f"manifest-{platform_id}.json" if epoch_id == "v1" else f"manifest-{platform_id}.epoch-{epoch_id}.json"
+    if generation is not None:
+        from conductress.sweep.generations import generation_path
+
+        manifest["generation"] = dict(generation)
+        filename = generation_path(Path(filename), generation["id"]).name
     (output_dir / filename).write_text(json.dumps(manifest, indent=2))

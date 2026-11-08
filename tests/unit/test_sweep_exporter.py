@@ -430,3 +430,25 @@ class TestSettledMetadata:
         output = tmp_path / "series.json"
         coord.export(output, platform="arm64/c7g.metal/graviton3")
         assert json.loads(output.read_text())["metadata"]["settled"] is True
+
+
+def test_export_manifest_advertises_generations(tmp_path):
+    from unittest.mock import patch
+
+    from conductress.sweep.exporter import export_manifest
+
+    closed = [{"id": "2026-11-06", "epoch": "v3", "until": "2026-11-06T16:14:23Z", "label": "OS update"}]
+    with patch("conductress.publisher.detect_platform", return_value=("intel", "Intel")):
+        export_manifest(
+            tmp_path, platforms=["intel"], workloads=[("get", "throughput")], epoch_id="v3", generations=closed
+        )
+        export_manifest(tmp_path, platforms=["intel"], workloads=[("get", "throughput")], epoch_id="v3")
+    live = json.loads((tmp_path / "manifest-intel.epoch-v3.json").read_text())
+    # The second call (no generations) wins the live file name: an empty list, never a missing key.
+    assert live["generations"] == []
+    with patch("conductress.publisher.detect_platform", return_value=("intel", "Intel")):
+        export_manifest(
+            tmp_path, platforms=["intel"], workloads=[("get", "throughput")], epoch_id="v3", generations=closed
+        )
+    live = json.loads((tmp_path / "manifest-intel.epoch-v3.json").read_text())
+    assert live["generations"] == closed and "generation" not in live

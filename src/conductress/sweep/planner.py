@@ -88,6 +88,10 @@ class BenchmarkPoint:
     # measured) or "history" (bisection / backfill).  None on points recorded
     # before the field existed.
     sample: Optional[str] = None
+    # The task that produced ``value`` (its result row's task_id). Lets the
+    # exporter honour the task exclusion list (sweep/generations.py). None on
+    # points recorded before the field existed.
+    task_id: Optional[str] = None
     status: PointStatus = PointStatus.PENDING
 
     @property
@@ -248,6 +252,7 @@ class SweepState:
                     "cpu_stacks_main": p.cpu_stacks_main,
                     "cpu_stacks_io": p.cpu_stacks_io,
                     "sample": p.sample,
+                    "task_id": p.task_id,
                     "status": p.status.name,
                 }
                 for commit, p in self.points.items()
@@ -312,6 +317,7 @@ class SweepState:
                 cpu_stacks_main=p_data.get("cpu_stacks_main"),
                 cpu_stacks_io=p_data.get("cpu_stacks_io"),
                 sample=p_data.get("sample"),
+                task_id=p_data.get("task_id"),
                 status=PointStatus[p_data.get("status", "PENDING")],
             )
 
@@ -625,8 +631,19 @@ class SweepPlanner:
         return None
 
     def _get_ordered_completed_points(self) -> list[BenchmarkPoint]:
-        """Get all completed points ordered by their position in merge_commits."""
-        completed = [p for p in self.state.points.values() if p.is_complete and p.commit in self._commit_index]
+        """Get all completed points ordered by their position in merge_commits.
+
+        A point whose task is on the exclusion list (sweep/generations.py) is
+        left out here, so neither the exporters nor the bisection ever see it.
+        """
+        from conductress.sweep.generations import excluded_task_ids  # local: generations imports SweepState
+
+        excluded = excluded_task_ids()
+        completed = [
+            p
+            for p in self.state.points.values()
+            if p.is_complete and p.commit in self._commit_index and not (p.task_id and p.task_id in excluded)
+        ]
         completed.sort(key=lambda p: self._commit_index[p.commit])
         return completed
 

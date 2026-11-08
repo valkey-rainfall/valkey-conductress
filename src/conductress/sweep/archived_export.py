@@ -15,10 +15,14 @@ CPU-stack and notable files plus its manifest into the export dir, and returns.
 It is invoked only by ``conductress sweep export-archived`` -- never from the
 service start path -- so the load cost is paid deliberately, once, by hand.
 
-Only ``v1`` is supported: it is the only archived epoch, and its coordinators
-(the unqualified throughput series, the retired latency series, the memory
-series, and each comparison engine's v1 mirror) are exactly the ones the runner
-used to build before archival.
+Only ``v1`` is supported as an archived EPOCH: it is the only archived epoch,
+and its coordinators (the unqualified throughput series, the retired latency
+series, the memory series, and each comparison engine's v1 mirror) are exactly
+the ones the runner used to build before archival.
+
+A closed GENERATION of the live v3 epoch (``sweep/generations.py``) is exported
+the same way by :func:`export_archived_generation`: its state files are read
+once from ``v3/generations/<id>/`` and published under ``.gen-<id>`` names.
 """
 
 import logging
@@ -152,4 +156,99 @@ def export_archived_epoch(epoch: str, repo_path: Optional[Path] = None, output_d
         epochs=epochs,
     )
     logger.info("Exported %d %s series to %s", written, epoch, export_dir)
+    return written
+
+
+def _v3_roster(repo_path: Path) -> list:
+    """Every v3 coordinator of every engine, as the runner would build them."""
+    from conductress.sweep.coordinator_v3 import create_v3_coordinators
+
+    coordinators = list(create_v3_coordinators(repo_path))
+    for engine in config.SWEEP_ENGINES:
+        if engine.source == "valkey":
+            continue
+        coordinators.extend(create_v3_coordinators(Path.home() / engine.source, engine=engine))
+    return coordinators
+
+
+def export_archived_generation(
+    generation_id: str,
+    repo_path: Optional[Path] = None,
+    output_dir: Optional[Path] = None,
+    state_dir: Optional[Path] = None,
+    generations_file: Optional[Path] = None,
+) -> int:
+    """Export one closed v3 generation's dashboard files, once.
+
+    The generation must be recorded in ``generations.json`` (written by
+    ``conductress sweep close-generation``). Its state files under
+    ``v3/generations/<id>/`` are loaded once, each series is exported under its
+    live name plus a ``.gen-<id>`` suffix (``series-<plat>-<wl>-<metric>
+    .epoch-v3.gen-<id>.json``), with the notable feed and a generation manifest
+    beside them, into the publish export dir, where the next publish re-syncs
+    them. The runner service never loads these files. Returns the number of
+    series written.
+    """
+    from conductress.publisher import DashboardPublisher, detect_platform
+    from conductress.sweep.exporter import NotableSource, export_manifest, export_notable
+    from conductress.sweep.generations import (
+        GENERATIONS_FILE,
+        generation_dir,
+        generation_path,
+        load_generations,
+        rehome,
+    )
+
+    closed = load_generations(generations_file or GENERATIONS_FILE)
+    entry = next((g for g in closed if g.get("id") == generation_id), None)
+    if entry is None:
+        known = ", ".join(g.get("id", "?") for g in closed) or "none"
+        raise ValueError(f"generation {generation_id!r} is not recorded in generations.json (closed: {known})")
+    gen_dir = generation_dir(generation_id, state_dir) if state_dir else generation_dir(generation_id)
+    if not gen_dir.is_dir():
+        raise ValueError(f"generation directory does not exist: {gen_dir}")
+
+    repo_path = repo_path or (Path.home() / "valkey")
+    export_dir = output_dir or Path(config.PUBLISH_EXPORT_DIR)
+    export_dir.mkdir(parents=True, exist_ok=True)
+    platform_id, platform_label = detect_platform()
+    epoch_id = str(entry.get("epoch", "v3"))
+
+    coordinators = [c for c in _v3_roster(repo_path) if rehome(c, gen_dir)]
+    if not coordinators:
+        logger.warning("No archived state files under %s -- nothing to export", gen_dir)
+        return 0
+
+    def _path(name: str) -> Path:
+        return generation_path(DashboardPublisher._epoch_path(export_dir / name, epoch_id), generation_id)
+
+    written = 0
+    for coord in coordinators:
+        output = _path(f"series-{platform_id}-{coord.workload_id}-{coord.metric_id}.json")
+        coord.export(output, platform=platform_label)
+        DashboardPublisher._stamp_epoch(output, epoch_id, generation=generation_id)
+        written += 1
+
+    notable_sources = [
+        NotableSource(
+            state=coord.state, workload=coord.workload_id, metric=coord.metric_id, lower_is_better=coord.lower_is_better
+        )
+        for coord in coordinators
+        if coord.metric_id == "throughput" and (not coord.engine or coord.engine.source == "valkey")
+    ]
+    notable = _path(f"notable-{platform_id}.json")
+    export_notable(notable_sources, notable, platform_label)
+    DashboardPublisher._stamp_epoch(notable, epoch_id, generation=generation_id)
+
+    workloads = list(dict.fromkeys((c.workload_id, c.metric_id) for c in coordinators))
+    export_manifest(
+        export_dir,
+        platforms=["amd64", "arm64", "graviton4", "intel"],
+        workloads=workloads,
+        epoch_id=epoch_id,
+        epochs=DashboardPublisher.advertised_epoch_defs(config.SWEEP_EPOCH_PRECEDENCE),
+        generations=[g for g in closed if g.get("epoch", "v3") == epoch_id],
+        generation=entry,
+    )
+    logger.info("Exported %d series of generation %s to %s", written, generation_id, export_dir)
     return written
