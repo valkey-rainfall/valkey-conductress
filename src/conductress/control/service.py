@@ -74,6 +74,7 @@ class ControlService:
         results_jsonl_path: Optional[Any] = None,
         canary_notification_url: Optional[str] = None,
         canary_notify_warning: bool = False,
+        published_canary_dir: Optional[Any] = None,
     ):
         self.database = database
         self.registry = registry
@@ -86,6 +87,10 @@ class ControlService:
         self.canary_notification_url = canary_notification_url or notification_url
         self.canary_notify_warning = canary_notify_warning
         self.published_tasks_dir = published_tasks_dir
+        # Canary status files have their own directory so a deployment can
+        # publish them without publishing task records (which may carry
+        # private build and host details). Falls back to the task directory.
+        self.published_canary_dir = published_canary_dir if published_canary_dir is not None else published_tasks_dir
         self.results_jsonl_path = results_jsonl_path
         # Injectable HTTP delivery for the approval webhook; defaults to urlopen.
         self._notifier = notifier or _default_notifier
@@ -316,15 +321,15 @@ class ControlService:
         """Write the static canary status files the dashboard reads.
 
         ``canary/<runner_id>.json`` for the runner (or every runner when None)
-        and ``canary/fleet.json`` for all, under the published tasks
+        and ``canary/fleet.json`` for all, under the published canary
         directory, written atomically like the per-task files. No auth, like
         those files: a canary status holds nothing secret. Failures are logged
         and never propagate.
         """
-        if self.published_tasks_dir is None:
+        if self.published_canary_dir is None:
             return
         try:
-            canary_dir = self._public_dir(self.published_tasks_dir / "canary")
+            canary_dir = self._public_dir(self.published_canary_dir / "canary")
             fleet = self.canary_status()
             for entry in fleet["runners"]:
                 if runner_id is None or entry["runner_id"] == runner_id:

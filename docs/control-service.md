@@ -185,11 +185,22 @@ When `NOTIFICATION_URL` is set, the control plane POSTs a small JSON notice to t
 ### Canary notices and static canary status
 
 After every newly accepted canary observation the service writes two static
-files under the published tasks directory, no auth like the task files:
+files under the published canary directory (`PUBLISHED_CANARY_DIR`; default:
+`PUBLISHED_TASKS_DIR`), no auth like the task files:
 `canary/<runner_id>.json` (`{"schema_version": 1, "runner": <the entry GET
 /api/v1/canary/status returns for that runner>}`) and `canary/fleet.json`
 (the whole status document). They are also written at startup. The dashboard
 reads them for the runner cards and the platform banner.
+
+The two directories are separate on purpose. A task record repeats the task
+envelope and the full result (source, specifier, note, binary paths, the
+client TOML, host details), which can name private builds and hosts. A canary
+status only carries the public canary profile and the runner environment.
+A deployment that must not publish task records sets `PUBLISHED_CANARY_DIR`
+and leaves `PUBLISHED_TASKS_DIR` unset. The production data host does exactly
+that, and as a second guard its nginx server block answers 404 for `/tasks/`
+(`location ^~ /tasks/ { return 404; }`), so a task file that reaches the web
+root by mistake is still not served.
 
 It also POSTs, best effort and never blocking the ingest, one notice per event
 per accepted observation to `CANARY_NOTIFICATION_URL` (default: the approval
