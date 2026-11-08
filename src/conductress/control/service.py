@@ -324,8 +324,7 @@ class ControlService:
         if self.published_tasks_dir is None:
             return
         try:
-            canary_dir = self.published_tasks_dir / "canary"
-            canary_dir.mkdir(parents=True, exist_ok=True)
+            canary_dir = self._public_dir(self.published_tasks_dir / "canary")
             fleet = self.canary_status()
             for entry in fleet["runners"]:
                 if runner_id is None or entry["runner_id"] == runner_id:
@@ -336,10 +335,24 @@ class ControlService:
         except Exception:  # pylint: disable=broad-except
             logger.warning("unable to publish canary status", exc_info=True)
 
-    @staticmethod
-    def _write_static(target: Any, payload: dict[str, Any]) -> None:
+    # The published files are public by design (served by the web server with
+    # no auth), while the service itself runs with a restrictive umask (0077 in
+    # the shipped unit) so its database and logs stay private. Set the public
+    # modes explicitly instead of inheriting the umask.
+    PUBLIC_DIR_MODE = 0o755
+    PUBLIC_FILE_MODE = 0o644
+
+    @classmethod
+    def _public_dir(cls, directory: Any) -> Any:
+        directory.mkdir(parents=True, exist_ok=True)
+        directory.chmod(cls.PUBLIC_DIR_MODE)
+        return directory
+
+    @classmethod
+    def _write_static(cls, target: Any, payload: dict[str, Any]) -> None:
         temporary = target.with_suffix(".json.tmp")
         temporary.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
+        temporary.chmod(cls.PUBLIC_FILE_MODE)
         temporary.replace(target)
 
     def submit_task(
@@ -871,12 +884,8 @@ class ControlService:
                 logger.warning("unable to append results JSONL for task %s", task["task_id"], exc_info=True)
         if self.published_tasks_dir is not None:
             try:
-                tasks_dir = self.published_tasks_dir / "tasks"
-                tasks_dir.mkdir(parents=True, exist_ok=True)
-                target = tasks_dir / f"{task['task_id']}.json"
-                temporary = target.with_suffix(".json.tmp")
-                temporary.write_text(json.dumps(record, sort_keys=True), encoding="utf-8")
-                temporary.replace(target)
+                tasks_dir = self._public_dir(self.published_tasks_dir / "tasks")
+                self._write_static(tasks_dir / f"{task['task_id']}.json", record)
             except OSError:
                 logger.warning("unable to publish task JSON for task %s", task["task_id"], exc_info=True)
 
