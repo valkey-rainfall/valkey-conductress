@@ -631,8 +631,14 @@ async def update_host(server_info: config.ServerInfo):
     # Clean up deprecated/legacy files from older versions
     await cleanup_legacy_build_cache(host)
 
-    # Install and enable systemd service for the runner
-    await install_systemd_service(host)
+    # The runner service belongs on runner hosts only. A benchmark server
+    # (servers.json entry with role "server", the default for a remote host)
+    # never gets it: a runner unit there has no local server to drive, crash
+    # loops, and its restarts take CPU from the measured server.
+    if server_info.effective_role() == "runner":
+        await install_systemd_service(host)
+    else:
+        host.log_info_msg(f"Skipping the runner service: {server_info.name or server_info.ip} has role 'server'")
     await retire_status_timer(host)
 
     host.log_info_msg("Ensuring config repos cloned...")

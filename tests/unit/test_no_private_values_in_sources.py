@@ -24,6 +24,8 @@ SCANNED_DIRS = ("tests", "docs")
 SCANNED_SUFFIXES = {".py", ".md", ".json", ".toml", ".txt", ".yml", ".yaml", ".cfg", ".ini"}
 
 PLACEHOLDER_INSTANCE_IDS = {"i-0123456789abcdef0", "i-0fedcba9876543210"}
+# The hex-digit sequence, an obvious placeholder (tests/unit/test_confirmation.py).
+PLACEHOLDER_UUIDS = {"01234567-89ab-cdef-0123-456789abcdef"}
 PRIVATE_WORDS = ("superset", "frontier")
 
 IPV4 = re.compile(r"\b(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})\b")
@@ -33,7 +35,7 @@ PRIVATE_WORD = re.compile("|".join(PRIVATE_WORDS), re.IGNORECASE)
 
 
 def _is_placeholder_uuid(value: str) -> bool:
-    return all(len(set(group)) == 1 for group in value.split("-"))
+    return value in PLACEHOLDER_UUIDS or all(len(set(group)) == 1 for group in value.split("-"))
 
 
 def private_values_in(text: str) -> list[str]:

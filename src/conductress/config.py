@@ -787,6 +787,27 @@ class ServerInfo:
     """A unique descriptive name"""
     disabled: bool = False
     """Whether this server is disabled and should be skipped"""
+    role: str = ""
+    """``runner`` (this machine runs the Conductress runner service and may also host
+    servers) or ``server`` (a benchmark server only: no runner service is ever
+    installed there). Empty means the default of :meth:`effective_role`."""
+
+    ROLES = ("runner", "server")
+
+    def __post_init__(self) -> None:
+        if self.role and self.role not in self.ROLES:
+            raise ValueError(f"server {self.name or self.ip!r}: role must be one of {self.ROLES}, got {self.role!r}")
+
+    def effective_role(self) -> str:
+        """The explicit role, else ``runner`` for this machine (loopback) and ``server`` for any other host.
+
+        A remote entry in servers.json is a benchmark server by default: a
+        runner unit there would compete with the measured server for CPU (a
+        crash-looping runner on a server host disturbed a whole boot of results).
+        """
+        if self.role:
+            return self.role
+        return "runner" if self.ip in ("localhost", "127.0.0.1", "::1") else "server"
 
     def __eq__(self, other) -> bool:
         if not isinstance(other, ServerInfo):

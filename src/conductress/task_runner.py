@@ -223,7 +223,7 @@ class TaskRunner:
         another machine. ``same_host`` compares boot ids, which are unique per
         host and boot. A failed read logs a warning and leaves None.
         """
-        from .runner_identity import get_runner_info
+        from .runner_identity import get_runner_info, server_host_busy_warning
 
         try:
             environment = await Server(server_info.ip, username=server_info.username).collect_host_environment()
@@ -232,6 +232,9 @@ class TaskRunner:
             return None
         local_boot = get_runner_info()["environment"].get("boot_id")
         environment["same_host"] = bool(environment.get("boot_id")) and environment.get("boot_id") == local_boot
+        environment["busy_warning"] = server_host_busy_warning(environment)
+        if environment["busy_warning"]:
+            logger.warning("Server host %s is busy before the task: %s", server_info.ip, environment["busy_warning"])
         return environment
 
     async def __run_task(self, task_data: BaseTaskData) -> None:
