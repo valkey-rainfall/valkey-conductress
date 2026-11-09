@@ -81,6 +81,13 @@ def environment_changes(prev_env: Dict[str, Any], environment: Dict[str, Any]) -
             continue
         if key not in prev_env and cur_schema > prev_schema:
             continue  # new field, not a changed environment
+        if isinstance(old_v, dict) and isinstance(new_v, dict):
+            # A nested block (``packages``): one change per member, dotted,
+            # so a label reads ``packages.glibc: a -> b``.
+            for sub in sorted(set(old_v) | set(new_v)):
+                if old_v.get(sub) != new_v.get(sub):
+                    changes.append(f"{key}.{sub}: {old_v.get(sub)!r} -> {new_v.get(sub)!r}")
+            continue
         changes.append(f"{key}: {old_v!r} -> {new_v!r}")
     return changes
 

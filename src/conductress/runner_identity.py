@@ -26,7 +26,13 @@ RUNNER_INFO_SCHEMA_VERSION = 1
 # 2: ``environment`` carries glibc_version, cpu_microcode, boot_id,
 # cachecannon_commit and cachecannon_dirty (each may be None), and a result
 # row may carry ``server_environment`` for the host the server ran on.
-PROVENANCE_SCHEMA_VERSION = 2
+# Schema 3 adds ``packages``: the installed version-release of a short fixed
+# list of packages (``rpm -q``), None where rpm is missing. The running libc
+# reports ``2.34`` before and after a glibc update; the package release moves.
+PROVENANCE_SCHEMA_VERSION = 3
+PACKAGE_NAMES = ("kernel", "glibc", "microcode_ctl", "tuned")
+_RPM_QUERY = ["rpm", "-q", "--qf", "%{NAME}=%{VERSION}-%{RELEASE}\n", *PACKAGE_NAMES]
+_RPM_TIMEOUT_SECONDS = 2.0
 _RUNNER_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
 _ALLOWED_CONFIG_KEYS = {"schema_version", "runner_id", "display_name"}
 _UNKNOWN_REVISION = "unknown"
@@ -47,12 +53,17 @@ HOST_FIELDS = (
     "glibc_version",
     "cpu_microcode",
     "boot_id",
+    "packages",
 )
 
 # One shell line that prints the server host's environment, one ``key=value``
 # per line, parsed by :func:`parse_remote_environment`. Every read is a local
-# file or getconf; a missing file prints an empty value.
+# file, getconf or rpm; a missing file or a host without rpm prints an empty
+# value. The packages line holds ``name=version-release`` items joined by
+# commas; rpm's "package X is not installed" items are skipped by the parser.
 REMOTE_ENVIRONMENT_COMMAND = (
+    "echo packages=$(rpm -q --qf '%{NAME}=%{VERSION}-%{RELEASE},' " + " ".join(PACKAGE_NAMES) + " 2>/dev/null"
+    " | tr '\\n' ','); "
     "echo kernel_release=$(uname -r); echo machine=$(uname -m); "
     "echo boot_id=$(cat /proc/sys/kernel/random/boot_id 2>/dev/null); "
     "echo machine_id=$(cat /etc/machine-id 2>/dev/null || cat /var/lib/dbus/machine-id 2>/dev/null); "
@@ -212,6 +223,45 @@ def _boot_id(path: Path = Path("/proc/sys/kernel/random/boot_id")) -> Optional[s
     return _read_first([path])
 
 
+def parse_package_versions(items: list[str], kernel_release: Optional[str] = None) -> dict[str, Optional[str]]:
+    """``{name: version-release}`` for :data:`PACKAGE_NAMES` from ``name=version-release`` items.
+
+    Items that are not of that form (rpm's ``package X is not installed``) are
+    skipped; a package without an item is None. Several installed kernels are
+    normal (the previous one stays until it is removed); the one whose
+    version-release is the prefix of the running ``kernel_release`` wins, else
+    the last listed.
+    """
+    found: dict[str, list[str]] = {name: [] for name in PACKAGE_NAMES}
+    for item in items:
+        name, sep, version = item.strip().partition("=")
+        if sep and name in found and version:
+            found[name].append(version)
+    packages: dict[str, Optional[str]] = {}
+    for name in PACKAGE_NAMES:
+        versions = found[name]
+        chosen = versions[-1] if versions else None
+        if name == "kernel" and kernel_release:
+            running = [v for v in versions if kernel_release.startswith(v)]
+            if running:
+                chosen = running[0]
+        packages[name] = chosen
+    return packages
+
+
+def _installed_packages(kernel_release: Optional[str] = None) -> Optional[dict[str, Optional[str]]]:
+    """The installed version-release of :data:`PACKAGE_NAMES` via rpm; None where rpm is missing or fails."""
+    try:
+        result = subprocess.run(_RPM_QUERY, capture_output=True, text=True, timeout=_RPM_TIMEOUT_SECONDS, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    # rpm exits non-zero when any package is not installed; its stdout still
+    # lists the installed ones, one per line.
+    if not result.stdout.strip():
+        return None
+    return parse_package_versions(result.stdout.splitlines(), kernel_release)
+
+
 @lru_cache(maxsize=8)
 def _cachecannon_identity(binary: str, mtime_ns: int) -> dict[str, Any]:
     """Commit and dirty flag of the cachecannon checkout a binary was built from.
@@ -290,7 +340,11 @@ def parse_remote_environment(text: str) -> dict[str, Any]:
         "glibc_version": field("glibc_version"),
         "cpu_microcode": field("cpu_microcode"),
         "boot_id": field("boot_id"),
+        "packages": None,
     }
+    packages_field = field("packages")
+    if packages_field:
+        env["packages"] = parse_package_versions(packages_field.split(","), env["kernel_release"])
     return env
 
 
@@ -307,10 +361,14 @@ def environment_for_period(row: dict[str, Any]) -> dict[str, Any]:
     for key in PERIOD_FIELDS + BOOT_FIELDS:
         reduced[key] = environment.get(key)
     reduced["cachecannon_dirty"] = environment.get("cachecannon_dirty")
+    if "packages" in environment:
+        reduced["packages"] = environment.get("packages")
     server = row.get("server_environment")
     if isinstance(server, dict) and not server.get("same_host", False):
         for key in ("kernel_release", "glibc_version", "cpu_microcode", "boot_id"):
             reduced[f"server_{key}"] = server.get(key)
+        if "packages" in server:
+            reduced["server_packages"] = server.get("packages")
     return reduced
 
 
@@ -375,6 +433,7 @@ def get_runner_info() -> dict[str, Any]:
             "glibc_version": _glibc_version(),
             "cpu_microcode": _cpu_microcode(cpuinfo),
             "boot_id": _boot_id(),
+            "packages": _installed_packages(platform.release()),
         },
     }
 
