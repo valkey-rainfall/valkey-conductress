@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
@@ -390,6 +391,33 @@ class TestRequests:
         cf.request_run(at=EVENT, label="kernel update", path=path, now=NOW, dry_run=True)
         assert not path.exists()
 
+    def test_a_request_during_a_runner_write_is_not_lost(self, tmp_path):
+        """The runner and the operator command take the same lock, so neither write is lost."""
+        path = tmp_path / "runs.json"
+        holding, release = threading.Event(), threading.Event()
+
+        def runner_write() -> None:
+            with cf.state_lock(path):
+                state = cf.load_state(path)
+                holding.set()
+                release.wait(5)
+                state["last_host"] = {"signature": {"kernel_release": "k2"}, "at": "2026-11-07T00:00:00Z"}
+                cf.save_state(state, path)
+
+        writer = threading.Thread(target=runner_write)
+        writer.start()
+        assert holding.wait(5)
+        requester = threading.Thread(target=lambda: cf.request_run(at=EVENT, label="kernel update", path=path, now=NOW))
+        requester.start()
+        requester.join(0.3)
+        assert requester.is_alive(), "the request must wait for the runner's write"
+        release.set()
+        writer.join(5)
+        requester.join(5)
+        state = cf.load_state(path)
+        assert state["last_host"]["signature"] == {"kernel_release": "k2"}
+        assert [r["label"] for r in state["runs"]] == ["kernel update"]
+
 
 # --------------------------------------------------------------------------- scheduling
 
@@ -446,7 +474,7 @@ def test_export_holds_only_public_fields(rig):
     # Private material in the private state must not reach the public file.
     state = cf.load_state(coordinator.state_path)
     state["last_host"]["signature"]["conductress_revision"] = "f" * 40
-    state["runs"][0]["note"] = "boot 01234567-89ab-cdef-0123-456789abcdef on 198.51.100.7 at /opt/runner/data"
+    state["runs"][0]["note"] = "boot 11111111-2222-3333-4444-555555555555 on 198.51.100.7 at /opt/runner/data"
     state["runs"].append(dict(state["runs"][0], run_id="confirm-old", status="cleared", label="host 198.51.100.9"))
     cf.save_state(state, coordinator.state_path)
 
