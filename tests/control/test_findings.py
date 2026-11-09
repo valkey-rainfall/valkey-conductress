@@ -274,7 +274,7 @@ class TestPublicOutput:
             "conductress_revision": rev_a,
             "boot_id": "11111111-2222-3333-4444-555555555555",
             "instance_id": "i-0123456789abcdef0",
-            "host_fingerprint": "c4c46be36d50f57d",
+            "host_fingerprint": "0f1e2d3c4b5a6978",
             "provenance_schema_version": 2,
         }
         scores = noisy(30, 100.0, 70) + noisy(10, 105.0, 71)
@@ -302,7 +302,7 @@ class TestPublicOutput:
             r"\d+\.\d+\.\d+\.\d+",
             r"/home/",
             r"[0-9a-f]{8}-[0-9a-f]{4}-",
-            "c4c46be3",
+            "0f1e2d3c",
         ):
             assert not re.search(pattern, text), pattern
         event = next(e for e in findings["events"] if e["date"] == "2026-10-01")
