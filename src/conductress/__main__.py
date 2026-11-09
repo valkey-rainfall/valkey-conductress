@@ -236,6 +236,34 @@ def main() -> None:
         "--force", action="store_true", help="Run even if the runner service appears active (unsafe)"
     )
 
+    add_event_parser = sweep_sub.add_parser(
+        "add-event",
+        help=(
+            "Record an environment change the provenance fields cannot see (sweep_data/environment_events.json). "
+            "Published in the manifest and used by the canary findings. The label is public."
+        ),
+    )
+    add_event_parser.add_argument("--at", required=True, help="UTC instant the change began, ISO 8601")
+    add_event_parser.add_argument("--until", default=None, help="UTC instant the change ended (e.g. back from reboot)")
+    add_event_parser.add_argument("--label", required=True, help="What changed, for a public reader")
+    add_event_parser.add_argument(
+        "--fields", default="", help="Comma-separated words, e.g. glibc,microcode_ctl,reboot (kinds of change)"
+    )
+    add_event_parser.add_argument("--by", default="operator", help="Who recorded it (kept on the runner only)")
+    add_event_parser.add_argument("--dry-run", action="store_true", help="Validate and print; write nothing")
+
+    explain_parser = sweep_sub.add_parser(
+        "explain-event",
+        help=(
+            "Explain the canary event of a date on this runner (it becomes 'explained' on the canary page). "
+            "The text is public."
+        ),
+    )
+    explain_parser.add_argument("--date", required=True, help="Event date as shown on the canary page (YYYY-MM-DD)")
+    explain_parser.add_argument("--text", required=True, help="The explanation, for a public reader")
+    explain_parser.add_argument("--by", default="operator", help="Who recorded it (kept on the runner only)")
+    explain_parser.add_argument("--dry-run", action="store_true", help="Validate and print; write nothing")
+
     args, remaining = parser.parse_known_args()
     if args.command == "run" and args.management_settle is not None and args.management_settle < 0:
         parser.error("--management-settle must not be negative")
@@ -568,6 +596,31 @@ def main() -> None:
                     f"Next: 'conductress sweep export-archived --generation {close_result.generation_id}' "
                     "to publish the archived files, then start the runner service."
                 )
+
+        elif args.sweep_command in ("add-event", "explain-event"):
+            from conductress.sweep.environment_events import add_event, add_explanation, default_path, parse_utc
+
+            try:
+                if args.sweep_command == "add-event":
+                    entry = add_event(
+                        at=parse_utc(args.at),
+                        until=parse_utc(args.until) if args.until else None,
+                        label=args.label,
+                        fields=[f for f in args.fields.split(",") if f.strip()],
+                        recorded_by=args.by,
+                        dry_run=args.dry_run,
+                    )
+                else:
+                    entry = add_explanation(
+                        event_date=args.date, text=args.text, recorded_by=args.by, dry_run=args.dry_run
+                    )
+            except ValueError as exc:
+                print(f"error: {exc}")
+                sys.exit(2)
+            verb = "Would record" if args.dry_run else "Recorded"
+            print(f"{verb} in {default_path()}: {entry}")
+            if not args.dry_run:
+                print("It is published with the next sweep publication.")
 
         elif args.sweep_command == "status":
             state = SweepState.load(SWEEP_STATE_FILE)

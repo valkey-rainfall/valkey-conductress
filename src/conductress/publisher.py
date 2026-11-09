@@ -188,6 +188,7 @@ class DashboardPublisher:
 
     def _publish(self) -> None:
         """Export each measurement epoch independently, then rsync."""
+        from conductress.sweep.environment_events import manifest_notes
         from conductress.sweep.exporter import (
             NotableSource,
             export_cpu_profile,
@@ -280,6 +281,7 @@ class DashboardPublisher:
                 # ``sweep export-archived --generation``) and are re-synced as
                 # is; the live manifest only has to advertise them.
                 generations = [g for g in load_generations() if g.get("epoch", "v3") == epoch_id]
+                environment_events, explanations = manifest_notes()
                 export_manifest(
                     self._export_dir,
                     platforms=["amd64", "arm64", "graviton4", "intel"],
@@ -287,6 +289,8 @@ class DashboardPublisher:
                     epoch_id=epoch_id,
                     epochs=epoch_defs,
                     generations=generations,
+                    environment_events=environment_events,
+                    explanations=explanations,
                 )
 
             self._refresh_archived_manifests(epoch_defs)

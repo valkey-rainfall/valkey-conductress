@@ -179,3 +179,43 @@ class TestPublicCanaryStatus:
 
     def test_every_known_key_is_classified(self):
         assert pf.unknown_canary_keys({"generated_at": "t", "runners": [_entry()]}) == []
+
+
+class TestFieldClassification:
+    def test_public_value_key(self):
+        assert pf.public_value_key("kernel_release") and pf.public_value_key("packages.tuned")
+        assert pf.public_value_key("server_packages.glibc")
+        assert not pf.public_value_key("conductress_revision") and not pf.public_value_key("boot_id")
+
+    def test_change_type_label(self):
+        assert pf.change_type_label("conductress_revision") == "harness revision changed"
+        assert pf.change_type_label("cachecannon_sha256") == "load generator changed"
+        assert pf.change_type_label("server_boot_id") == "server reboot"
+        assert pf.change_type_label("brand_new") == "brand_new changed"
+
+
+class TestPublicText:
+    def test_withholds_private_shapes(self):
+        for text in (SHA_A, "on 10.0.0.1", "see /home/someone/x", "mail a@b.example", "i-0690c81234ab4ecb8"):
+            assert pf.public_text(f"note {text}") == pf.WITHHELD
+        assert pf.private_detail("plain words") is None
+
+    def test_normalises_and_cuts(self):
+        assert pf.public_text("  two   words ") == "two words"
+        assert pf.public_text("") is None and pf.public_text(None) is None
+        assert len(pf.public_text("x" * 500)) == 300
+
+    def test_check_public_text_names_the_problem(self):
+        import pytest
+
+        assert pf.check_public_text(" a  b ", "label") == "a b"
+        with pytest.raises(ValueError, match="IPv4"):
+            pf.check_public_text("on 10.0.0.1", "label")
+        with pytest.raises(ValueError, match="empty"):
+            pf.check_public_text(" ", "label")
+        with pytest.raises(ValueError, match="longer"):
+            pf.check_public_text("x" * 301, "label")
+
+    def test_generation_free_text_is_checked(self):
+        generation = {"id": "g", "label": "moved to 10.0.0.9", "reason": "canary step", "closed_by": "someone"}
+        assert pf.public_generation(generation) == {"id": "g", "label": pf.WITHHELD, "reason": "canary step"}
