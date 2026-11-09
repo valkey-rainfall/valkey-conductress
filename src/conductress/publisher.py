@@ -12,6 +12,7 @@ from conductress.config import engine_repo_slug, should_profile_internals
 from conductress.utility import run_rsync
 
 if TYPE_CHECKING:
+    from conductress.sweep.confirmation import ConfirmationCoordinator
     from conductress.sweep.coordinator import BaseSweepCoordinator
     from conductress.task_queue import BaseTaskData
 
@@ -39,14 +40,24 @@ def detect_platform() -> tuple[str, str]:
 class DashboardPublisher:
     """Subscriber that exports sweep data and rsyncs to a remote server after task completions."""
 
-    def __init__(self, target: str, coordinators: "list[BaseSweepCoordinator]") -> None:
+    confirmation: "Optional[ConfirmationCoordinator]" = None
+
+    def __init__(
+        self,
+        target: str,
+        coordinators: "list[BaseSweepCoordinator]",
+        confirmation: "Optional[ConfirmationCoordinator]" = None,
+    ) -> None:
         """
         Args:
             target: rsync destination, e.g. "ec2-user@host:/var/www/data"
             coordinators: list of sweep coordinators whose data to export
+            confirmation: the confirmation sweep, when its switch is on; it
+                writes ``confirm-<platform>.epoch-v3.json``. None writes nothing.
         """
         self.target = target
         self.coordinators = coordinators
+        self.confirmation = confirmation
         # Key may be at different paths depending on host
         candidates = [Path.home() / "conductress" / "server-keyfile.pem", Path.home() / ".ssh" / "openssh-ec2-pair.pem"]
         self._ssh_key = next((k for k in candidates if k.exists()), candidates[0])
@@ -294,6 +305,12 @@ class DashboardPublisher:
                 )
 
             self._refresh_archived_manifests(epoch_defs)
+
+            if self.confirmation is not None:
+                confirm_file = self._epoch_path(
+                    self._export_dir / f"confirm-{self._platform_id}.json", config.SWEEP_V3_EPOCH_ID
+                )
+                self.confirmation.export(confirm_file, platform=self._platform_label)
 
             self._rsync()
         except Exception:

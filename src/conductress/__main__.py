@@ -264,6 +264,24 @@ def main() -> None:
     explain_parser.add_argument("--by", default="operator", help="Who recorded it (kept on the runner only)")
     explain_parser.add_argument("--dry-run", action="store_true", help="Validate and print; write nothing")
 
+    confirm_parser = sweep_sub.add_parser(
+        "confirm",
+        help=(
+            "Request a confirmation run for an environment event on this runner (sweep_data/confirm_runs.json): "
+            "old sweep points are measured again at the lowest priority. Needs CONDUCTRESS_CONFIRM_SWEEP on the "
+            "runner. The label is public."
+        ),
+    )
+    confirm_parser.add_argument("--at", required=True, help="UTC instant of the event, ISO 8601")
+    confirm_parser.add_argument("--label", required=True, help="What changed, for a public reader")
+    confirm_parser.add_argument("--budget", type=int, default=8, help="Tasks at most, 6-12 (default 8)")
+    confirm_parser.add_argument(
+        "--canary-step-shown",
+        action="store_true",
+        help="The canary page shows a located step at this event (needed when no host field changed)",
+    )
+    confirm_parser.add_argument("--dry-run", action="store_true", help="Validate and print; write nothing")
+
     args, remaining = parser.parse_known_args()
     if args.command == "run" and args.management_settle is not None and args.management_settle < 0:
         parser.error("--management-settle must not be negative")
@@ -621,6 +639,30 @@ def main() -> None:
             print(f"{verb} in {default_path()}: {entry}")
             if not args.dry_run:
                 print("It is published with the next sweep publication.")
+
+        elif args.sweep_command == "confirm":
+            from conductress.sweep import confirmation
+
+            try:
+                at = confirmation.parse_time(args.at)
+                if at is None:
+                    raise ValueError(f"--at must be an ISO 8601 instant, got {args.at!r}")
+                changes = confirmation.host_change_around(confirmation.default_results_file(), at)
+                if not changes and not args.canary_step_shown:
+                    print(
+                        "No host field changed around --at (a harness-only or reboot-only event, or no result "
+                        "row after it yet). Such an event starts a confirmation run only when the canary page "
+                        "shows a located step first. If it does, run the command again with --canary-step-shown."
+                    )
+                    sys.exit(1)
+                run = confirmation.request_run(at=at, label=args.label, budget=args.budget, dry_run=args.dry_run)
+            except ValueError as exc:
+                print(f"error: {exc}")
+                sys.exit(2)
+            verb = "Would request" if args.dry_run else "Requested"
+            print(f"{verb} {run['run_id']} in {confirmation.default_state_path()}: event {run['event_at']}")
+            if not args.dry_run:
+                print("It starts when no other sweep task is due, on a runner with CONDUCTRESS_CONFIRM_SWEEP on.")
 
         elif args.sweep_command == "status":
             state = SweepState.load(SWEEP_STATE_FILE)

@@ -38,6 +38,9 @@ class TaskPriority(Enum):
     LANDMARK = 2
     BISECTION = 3
     BACKFILL = 4
+    # A confirmation-sweep cell (sweep/confirmation.py): runs only when no other
+    # sweep series has a task to queue. Never produced by this planner.
+    CONFIRM = 5
 
 
 @dataclass

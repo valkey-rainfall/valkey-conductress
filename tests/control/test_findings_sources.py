@@ -211,3 +211,70 @@ def test_config_reads_the_sweep_dir_and_interval(monkeypatch, tmp_path):
     assert config.published_sweep_dir == tmp_path / "sweep"
     with pytest.raises(ValueError, match="findings_interval_seconds"):
         config.validate()
+
+
+def _write_confirm(sweep, runs):
+    (sweep / "confirm-testx.epoch-v3.json").write_text(
+        json.dumps({"schema_version": 1, "metadata": {"epoch": "v3", "platform": PLATFORM}, "runs": runs})
+    )
+
+
+def _confirm_run(status="confirmed", ended="2026-10-11T12:00:00Z", pairs=None):
+    return {
+        "run_id": "confirm-20261011T080000Z",
+        "event_at": "2026-10-10T17:00:00Z",
+        "label": "kernel: k1 -> k2",
+        "trigger": "automatic",
+        "budget": 8,
+        "status": status,
+        "started_at": "2026-10-11T08:00:00Z",
+        "ended_at": ended,
+        "pairs": (
+            pairs
+            if pairs is not None
+            else [
+                {"workload": f"get-{i}", "metric": "throughput", "commit": f"c{i}", "before": 100.0, "after": 110.0}
+                for i in range(3)
+            ]
+            + [{"workload": "get-9", "metric": "throughput", "commit": "c9", "before": 100.0, "after": None}]
+        ),
+    }
+
+
+def test_confirmation_runs_are_read_as_paired_series(setup):
+    _, _, sweep = setup
+    _write_confirm(sweep, [_confirm_run(), {"event_at": "bad"}, "junk"])
+    entry = load_sweep_inputs(sweep)[PLATFORM]
+    confirm = [p for p in entry["paired"] if p.series == "confirmation run"]
+    (paired,) = confirm
+    assert paired.cut == datetime(2026, 10, 10, 17, tzinfo=timezone.utc)
+    assert paired.before == (100.0, 100.0, 100.0) and paired.after == (110.0, 110.0, 110.0)
+    assert not paired.lower_is_better
+    (run,) = entry["confirmation_runs"]
+    assert (run.date, run.pairs, run.status) == ("2026-10-11", 3, "confirmed")
+
+
+def test_a_run_without_measured_pairs_gives_no_paired_series(setup):
+    _, _, sweep = setup
+    _write_confirm(sweep, [_confirm_run(status="running", ended=None, pairs=[])])
+    entry = load_sweep_inputs(sweep)[PLATFORM]
+    assert not [p for p in entry["paired"] if p.series == "confirmation run"]
+    (run,) = entry["confirmation_runs"]
+    assert (run.date, run.pairs, run.status) == ("2026-10-11", 0, "running")  # started_at date
+
+
+def test_last_confirmation_run_fills_the_consistency_panel(setup):
+    database, registry, sweep = setup
+    service = ControlService(database, registry, published_canary_dir=sweep)
+    _, consistency = service.canary_findings(now=datetime(2026, 10, 21, tzinfo=timezone.utc))
+    assert consistency["runners"][0]["last_confirmation_run"] is None
+    older = dict(_confirm_run(status="cleared", ended="2026-09-20T10:00:00Z"), run_id="confirm-20260920T080000Z")
+    _write_confirm(sweep, [older, _confirm_run()])
+    findings, consistency = service.canary_findings(now=datetime(2026, 10, 21, tzinfo=timezone.utc))
+    assert consistency["runners"][0]["last_confirmation_run"] == {
+        "date": "2026-10-11",
+        "pairs": 3,
+        "status": "confirmed",
+    }
+    event = next(e for e in findings["events"] if e["event_id"] == "runner-x:2026-10-11:0")
+    assert "confirmation run" in {t["series"] for t in event["tests"]}

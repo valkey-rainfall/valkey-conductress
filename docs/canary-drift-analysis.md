@@ -325,7 +325,23 @@ Inputs per live runner: its accepted observations and those of its archives
 (stitched, oldest first; the profile version is added to the environment),
 the manual events and explanations of its platform's sweep manifest, and the
 paired evidence of its closed series generations (the same commit and
-workload measured before and after the cut).
+workload measured before and after the cut), and its confirmation runs.
+
+### Confirmation evidence
+
+A confirmation run (`docs/configuration.md`, "Confirmation sweep") measures
+old sweep points again on the new host. The data host reads
+`confirm-<platform>.epoch-v3.json` from the sweep dir: each run with at least
+one measured pair becomes one paired series named `confirmation run`, with
+the run's event time as the cut, so it joins the event whose observation gap
+holds that time and is tested like any paired series (5 pairs for a verdict
+here; the run's own stop rule needs 3 pairs to confirm). The consistency
+panel's `last_confirmation_run` is the newest run: `{date, pairs, status}`,
+where `date` is the day it ended (else started), `pairs` the pairs measured
+and `status` one of `requested, running, confirmed, cleared,
+insufficient-data, no-pairs`; `null` when the runner has none. A run measures
+only the new environment, so `cleared` means "the new host reproduces the old
+numbers within the floor", not "the event changed nothing on any workload".
 
 ### Events
 

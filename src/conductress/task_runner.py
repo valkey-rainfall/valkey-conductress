@@ -194,12 +194,21 @@ class TaskRunner:
             for mem_coordinator in create_memory_coordinators(repo_path):
                 mem_coordinator.initialize()
                 self._subscribers.append(mem_coordinator)
+        # The confirmation sweep is ordered after every series coordinator: it
+        # runs only when none of them has a task due. None when its switch is off.
+        confirmation = None
+        if sweep:
+            from conductress.sweep.confirmation import create_confirmation_coordinator
+
+            confirmation = create_confirmation_coordinator(self._subscribers)
+            if confirmation is not None:
+                self._subscribers.append(confirmation)
         if publish_target:
             from conductress.publisher import DashboardPublisher
             from conductress.sweep.coordinator import BaseSweepCoordinator
 
             coordinators = [s for s in self._subscribers if isinstance(s, BaseSweepCoordinator)]
-            publisher = DashboardPublisher(publish_target, coordinators)
+            publisher = DashboardPublisher(publish_target, coordinators, confirmation=confirmation)
             self._subscribers.append(publisher)
         if nudge_url:
             self._subscribers.append(NudgeHook(nudge_url, events=nudge_on))

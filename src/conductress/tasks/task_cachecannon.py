@@ -208,6 +208,10 @@ class CachecannonTaskData(BaseTaskData):
     max_reps: int = 0  # 0 = fixed reps; >0 = adaptive mode upper limit
     target_cv: float = 0.0  # adaptive: stop early when 95% CI half-width (% of mean) <= this; 0 = disabled
     sweep_commit: str = ""  # non-empty marks this as a sweep task
+    # Non-empty marks a confirmation-sweep cell (sweep/confirmation.py). Such a
+    # task has no sweep_commit, so no series coordinator records it; its result
+    # row carries sample "confirm" and this run id.
+    confirm_run_id: str = ""
     rate_limit: int = 0  # fixed total req/s (open loop); 0 = closed loop (unlimited)
     perf_stat_enabled: bool = False  # perf stat per-thread counters every rep; CPU flamegraph on the last rep
     info_sections: str = ""  # comma-separated INFO sections to snapshot at the scored-window edges

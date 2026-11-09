@@ -195,6 +195,15 @@ class PairedSeries:
     lower_is_better: bool = False
 
 
+@dataclass(frozen=True)
+class ConfirmationRun:
+    """One confirmation run of the runner's sweep (``confirm-<platform>.epoch-v3.json``)."""
+
+    date: str  # YYYY-MM-DD the run ended, else started, else of its event
+    pairs: int  # pairs measured
+    status: str
+
+
 @dataclass
 class RunnerInput:
     runner_id: str
@@ -203,6 +212,7 @@ class RunnerInput:
     manual_events: list[ManualEvent] = field(default_factory=list)
     explanations: list[Explanation] = field(default_factory=list)
     paired: list[PairedSeries] = field(default_factory=list)
+    confirmation_runs: list[ConfirmationRun] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -878,8 +888,15 @@ def _consistency(analysis: _RunnerAnalysis, cfg: FindingsConfig, today: date) ->
         "events_insufficient_90d": sum(1 for t in recent if t["state"] == STATE_INSUFFICIENT),
         "missing_days_30d": missing(30),
         "missing_days_90d": len(missing(90)),
-        "last_confirmation_run": None,
+        "last_confirmation_run": _last_confirmation_run(analysis.runner.confirmation_runs),
     }
+
+
+def _last_confirmation_run(runs: Sequence[ConfirmationRun]) -> Optional[dict[str, Any]]:
+    if not runs:
+        return None
+    last = max(runs, key=lambda r: r.date)
+    return {"date": last.date, "pairs": last.pairs, "status": last.status}
 
 
 # --------------------------------------------------------------------------- document
@@ -912,7 +929,13 @@ def build_findings(
     for runner in runners:
         obs = sorted(runner.observations, key=lambda o: (o.utc_date, o.when))
         runner = RunnerInput(
-            runner.runner_id, runner.display_name, obs, runner.manual_events, runner.explanations, runner.paired
+            runner.runner_id,
+            runner.display_name,
+            obs,
+            runner.manual_events,
+            runner.explanations,
+            runner.paired,
+            runner.confirmation_runs,
         )
         scores = [float(o.score) for o in obs]
         events = build_events(runner)
