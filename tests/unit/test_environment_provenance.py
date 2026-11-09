@@ -67,6 +67,35 @@ class TestHostFields:
             with patch("conductress.runner_identity.platform.libc_ver", return_value=("", "")):
                 assert ri._glibc_version() is None
 
+    RPM_OUTPUT = (
+        "kernel=6.1.170-213.321.amzn2023\nkernel=6.1.189-236.400.amzn2023\n"
+        "glibc=2.34-231.amzn2023.0.5\nmicrocode_ctl=2.1-53.amzn2023.0.16\npackage tuned is not installed\n"
+    )
+
+    def test_installed_packages_pick_the_running_kernel_and_skip_missing_ones(self):
+        completed = subprocess.CompletedProcess(ri._RPM_QUERY, 1, stdout=self.RPM_OUTPUT, stderr="")
+        with patch.object(ri.subprocess, "run", return_value=completed) as run:
+            packages = ri._installed_packages("6.1.189-236.400.amzn2023.x86_64")
+        assert run.call_args.args[0] == ["rpm", "-q", "--qf", "%{NAME}=%{VERSION}-%{RELEASE}\n", *ri.PACKAGE_NAMES]
+        assert run.call_args.kwargs["timeout"] == 2.0
+        assert packages == {
+            "kernel": "6.1.189-236.400.amzn2023",
+            "glibc": "2.34-231.amzn2023.0.5",
+            "microcode_ctl": "2.1-53.amzn2023.0.16",
+            "tuned": None,
+        }
+        # No running-kernel match: the last listed kernel.
+        assert ri.parse_package_versions(self.RPM_OUTPUT.splitlines(), "5.10.0")["kernel"] == "6.1.189-236.400.amzn2023"
+
+    def test_installed_packages_without_rpm_or_on_timeout_is_none(self):
+        with patch.object(ri.subprocess, "run", side_effect=FileNotFoundError("rpm")):
+            assert ri._installed_packages("6.1") is None
+        with patch.object(ri.subprocess, "run", side_effect=subprocess.TimeoutExpired("rpm", 2.0)):
+            assert ri._installed_packages("6.1") is None
+        empty = subprocess.CompletedProcess(ri._RPM_QUERY, 1, stdout="", stderr="rpm: command not found")
+        with patch.object(ri.subprocess, "run", return_value=empty):
+            assert ri._installed_packages("6.1") is None
+
     def test_boot_id_reads_the_file(self, tmp_path):
         path = tmp_path / "boot_id"
         path.write_text("790c2972-0361-4349-b4e5-65d59f734c2e\n")
@@ -129,7 +158,7 @@ class TestCachecannonIdentity:
         with patch("conductress.runner_identity.get_local_platform_info", return_value=("intel", "intel/x", ["intel"])):
             with_binary = ri.get_result_provenance(str(binary))
             without = ri.get_result_provenance()
-        assert with_binary["provenance_schema_version"] == 2
+        assert with_binary["provenance_schema_version"] == 3
         assert with_binary["environment"]["cachecannon_commit"] == _git(repo, "rev-parse", "HEAD")
         assert without["environment"]["cachecannon_commit"] is None
         for key in ("glibc_version", "cpu_microcode", "boot_id", "kernel_release"):
@@ -157,6 +186,21 @@ class TestRemoteEnvironment:
             ]
             != env["host_fingerprint"]
         )
+
+    def test_remote_packages_line_is_parsed_and_missing_rpm_is_none(self):
+        env = ri.parse_remote_environment(self.OUTPUT)
+        assert env["packages"] is None  # a host without rpm prints an empty value
+        with_packages = self.OUTPUT + (
+            "\npackages=kernel=6.1.170-213.321.amzn2023,kernel=6.18.56-125.164.amzn2023,"
+            "glibc=2.34-231.amzn2023.0.5,package tuned is not installed,"
+        )
+        env = ri.parse_remote_environment(with_packages)
+        assert env["packages"] == {
+            "kernel": "6.18.56-125.164.amzn2023",  # the running kernel, not the newest listed
+            "glibc": "2.34-231.amzn2023.0.5",
+            "microcode_ctl": None,
+            "tuned": None,
+        }
 
     def test_truncated_output_never_raises(self):
         env = ri.parse_remote_environment("kernel_release=6.1\nmach")
@@ -244,6 +288,22 @@ class TestEnvironmentChanges:
     def test_meta_keys_never_count(self):
         assert environment_changes(dict(self.V2_SAME, same_host=True), dict(self.V2_SAME, same_host=False)) == []
 
+    def test_package_release_change_is_one_dotted_change_per_package(self):
+        """glibc 2.34 before and after the 2026-11-06 update: only the package release moved."""
+        from conductress.public_fields import public_change_label
+
+        before = dict(self.V2_SAME, provenance_schema_version=3, packages={"glibc": "2.34-231.0.4", "kernel": "k1"})
+        after = dict(before, packages={"glibc": "2.34-231.0.5", "kernel": "k1", "tuned": None})
+        changes = environment_changes(before, after)
+        assert changes == ["packages.glibc: '2.34-231.0.4' -> '2.34-231.0.5'"]
+        assert public_change_label(changes) == "packages.glibc: 2.34-231.0.4 -> 2.34-231.0.5"
+        # A schema-2 row has no packages at all: gaining the block is not a change.
+        assert environment_changes(self.V2_SAME, after) == []
+        # rpm missing on one side (None) against a block is a change of the block.
+        assert environment_changes(dict(after, packages=None), after) == [
+            "packages: None -> {'glibc': '2.34-231.0.5', 'kernel': 'k1', 'tuned': None}"
+        ]
+
     def test_environment_for_period_reduces_a_row(self):
         row = {
             "provenance_schema_version": 2,
@@ -265,6 +325,13 @@ class TestEnvironmentChanges:
         reduced = ri.environment_for_period(row)
         assert reduced["kernel_release"] == "6.1.170" and reduced["server_kernel_release"] == "6.18"
         assert reduced["cachecannon_commit"] == "c1" and "host_fingerprint" not in reduced
+        assert "packages" not in reduced and "server_packages" not in reduced  # schema-2 rows have none
+        row["environment"]["packages"] = {"glibc": "2.34-231.0.5"}
+        row["server_environment"]["packages"] = {"glibc": "2.34-231.0.4"}
+        reduced = ri.environment_for_period(row)
+        assert reduced["packages"] == {"glibc": "2.34-231.0.5"} and reduced["server_packages"] == {
+            "glibc": "2.34-231.0.4"
+        }
         row["server_environment"]["same_host"] = True
         assert "server_kernel_release" not in ri.environment_for_period(row)
         assert ri.environment_for_period({})["provenance_schema_version"] is None

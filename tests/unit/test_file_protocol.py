@@ -117,7 +117,7 @@ class TestFileProtocol:
             data = json.loads(line)
             assert data["method"] == "perf-set"
             assert data["score"] == 1000.0
-            assert data["provenance_schema_version"] == 2
+            assert data["provenance_schema_version"] == 3
             assert data["runner_id"]
             assert data["platform"]
             assert data["environment"]["host_fingerprint"]
