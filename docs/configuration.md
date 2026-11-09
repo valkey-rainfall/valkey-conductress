@@ -344,7 +344,7 @@ sudo systemctl stop conductress.service
 conductress sweep close-generation --epoch v3 \
     --cut 2026-11-06T16:14:23Z --resume 2026-11-06T18:21:58Z \
     --label "kernel 6.1.170 -> 6.1.189, glibc, microcode 0x2b000685" \
-    --reason "canary alarm +12.3% on 2026-11-07" --by rain [--dry-run]
+    --reason "canary alarm +12.3% on 2026-11-07" --by operator [--dry-run]
 conductress sweep export-archived --generation 2026-11-06
 sudo systemctl start conductress.service
 conductress sweep resume

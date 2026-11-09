@@ -1152,9 +1152,9 @@ class TestCanaryAlarmSurfacing:
         "glibc_version": "2.34",
         "conductress_revision": "9ba063dee3d204aa4c1ec6d416e40cec8dea806c",
         "cachecannon_commit": "31a2befaa8bf7b3b7a7f7e03e2a847a2e407a3ce",
-        "boot_id": "86bc23db-f6bc-49fa-82b7-f48d801a298b",
-        "instance_id": "i-0690c81234ab4ecb8",
-        "host_fingerprint": "c4c46be36d50f57d",
+        "boot_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        "instance_id": "i-0123456789abcdef0",
+        "host_fingerprint": "0123456789abcdef",
         "runner_id": "armbench",
     }
 
@@ -1175,7 +1175,7 @@ class TestCanaryAlarmSurfacing:
         api = service.canary_status()
         assert unknown_canary_keys(api) == []
         api_text = json.dumps(api)
-        assert "9ba063de" in api_text and "i-0690c81234ab4ecb8" in api_text  # the API is private and complete
+        assert "9ba063de" in api_text and "i-0123456789abcdef0" in api_text  # the API is private and complete
 
         canary_dir = tmp_path / "published" / "canary"
         pinned = [r["profile"]["pinned_commit"] for r in api["runners"] if r.get("profile")]
@@ -1184,7 +1184,7 @@ class TestCanaryAlarmSurfacing:
             document = json.loads((canary_dir / name).read_text())
             assert private_shapes_in(document, allowed_values=pinned) == [], name
             text = json.dumps(document)
-            for private in ("environment_json", "host_fingerprint", "instance_id", "boot_id", "c4c46be36d50f57d"):
+            for private in ("environment_json", "host_fingerprint", "instance_id", "boot_id", "0123456789abcdef"):
                 assert private not in text, (name, private)
         runner = json.loads((canary_dir / "armbench.json").read_text())["runner"]
         latest = runner["latest_observation"]
