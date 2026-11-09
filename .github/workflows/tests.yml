@@ -28,7 +28,9 @@ jobs:
           echo "All commits have DCO signoff ✓"
 
   lint:
-    runs-on: ubuntu-latest
+    # Pinned: ubuntu-latest became Ubuntu 26.04 on 2026-11-09, and
+    # actions/setup-python has no 3.9 build for it. The runners use 3.9.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
