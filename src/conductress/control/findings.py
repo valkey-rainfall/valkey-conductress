@@ -28,7 +28,7 @@ Rules (also in ``docs/canary-drift-analysis.md``, "Findings"):
 - Benjamini-Hochberg over every test in one analysis.
 - Floor per runner: ``max(0.5%, 3 x robust sd of the canary before window)``.
 - Minimum data: 7 days before and 3 after to confirm; a flat event (interval
-  inside the floor) can be cleared with 4 before, 3 after and 10 in total, so
+  inside the floor) can be cleared with 3 before, 3 after and 10 in total, so
   an event soon after a located step or at the start of the history is not
   left as "not enough data" for good. The noise of a short before window
   comes from the after window.
@@ -233,7 +233,7 @@ class FindingsConfig:
     # A flat event can be CLEARED with fewer days before it (an event soon after a located step, or
     # at the start of the history) when the interval is still inside the floor: at least this many
     # days before, min_after after, and this many in total.
-    min_before_clear: int = 4
+    min_before_clear: int = 3
     min_total_clear: int = 10
     min_pairs: int = 5
     alpha: float = 0.05

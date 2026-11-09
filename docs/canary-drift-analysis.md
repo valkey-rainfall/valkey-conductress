@@ -390,7 +390,7 @@ revision, manual, other change.
 | State | Rule |
 |---|---|
 | `confirmed` | at least 7 days before and 3 after (5 pairs for paired); q < 0.05; CI excludes 0; `|effect| >=` floor |
-| `cleared` | CI inside +/- floor, with at least 4 days before, 3 after and 10 in total, so a flat event soon after a located step or at the start of the history is cleared too (`below_floor_shift: true` when q < 0.05 all the same) |
+| `cleared` | CI inside +/- floor, with at least 3 days before, 3 after and 10 in total, so a flat event soon after a located step or at the start of the history is cleared too (`below_floor_shift: true` when q < 0.05 all the same) |
 | `suspected` | otherwise, when p < 0.05 or `|effect| >=` 2 x floor |
 | `insufficient-data` | minimum data not met, or no signal and the CI still too wide to clear; `reason` says which ("1 day(s) after the event, needs 3") |
 | `explained` | an operator explanation exists for the event date (`conductress sweep explain-event`) |

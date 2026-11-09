@@ -24,6 +24,10 @@ from conductress.control.findings import (
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "canary_findings" / "backtest.json"
 FAST = FindingsConfig(bootstrap=2000, permutations=4000)
+# Insufficient-data events of the back-test fixture after the clearing rule: the 11-09 deploy on 4
+# runners and its fleet row, 11-06 and 09-19 (too few days after), and 09-22, 09-23, 08-31 (1-2 days
+# before).
+INSUFFICIENT_COUNT = 10
 
 
 def ts(text: str) -> datetime:
@@ -562,8 +566,35 @@ class TestBacktestRegression:
         ]
         assert insufficient and all(e["reason"] for e in insufficient)
         assert by_id(backtest)["runner-c:2026-11-09:0"]["reason"] == "1 day(s) after the event, needs 3"
-        assert by_id(backtest)["runner-a:2026-09-23:0"]["reason"] == "2 day(s) before the event, needs 4"
-        assert backtest["state_counts"][fx.STATE_INSUFFICIENT] == 14
+        assert by_id(backtest)["runner-a:2026-09-23:0"]["reason"] == "2 day(s) before the event, needs 3"
+        assert backtest["state_counts"][fx.STATE_INSUFFICIENT] == INSUFFICIENT_COUNT
+
+    @pytest.mark.parametrize(
+        "event_id, n_before, effect_range",
+        [
+            # The rows of the first live review (page rank, runner, date), all flat and inside the floor.
+            ("runner-a:2026-09-25:0", 4, (-0.2, 0.1)),  # #9: -0.06%, CI -0.35..+0.30, 28 days after
+            ("runner-c:2026-09-05:0", 6, (-0.1, 0.1)),  # #13: 0.00%, CI -0.36..+0.20
+            ("runner-b:2026-09-02:0", 3, (-0.1, 0.1)),  # #22: -0.03%, CI -0.22..+0.28, 3 days of history
+            ("runner-a:2026-09-02:0", 3, (-0.5, -0.2)),  # #2: -0.37%, CI -0.56..-0.08, floor 1.26%
+        ],
+    )
+    def test_review_cases_are_cleared(self, backtest, event_id, n_before, effect_range):
+        event = by_id(backtest)[event_id]
+        canary = next(t for t in event["tests"] if t["kind"] == "canary")
+        assert canary["n_before"] == n_before and canary["n_after"] >= 19
+        assert effect_range[0] < event["effect_pct"] < effect_range[1]
+        assert -event["floor_pct"] <= event["ci_pct"][0] and event["ci_pct"][1] <= event["floor_pct"]
+        assert event["state"] == fx.STATE_CLEARED, event_id
+
+    def test_one_day_before_has_no_interval_and_stays_insufficient(self, backtest):
+        # A day right after a located step (runner A 09-22) or the second day of the history
+        # (runner C 08-31): one value before cannot give an interval.
+        for event_id in ("runner-a:2026-09-22:0", "runner-c:2026-08-31:0"):
+            event = by_id(backtest)[event_id]
+            assert event["ci_pct"] == [None, None]
+            assert event["state"] == fx.STATE_INSUFFICIENT
+            assert event["reason"] == "1 day(s) before the event, needs 3"
 
     def test_explained_events_carry_no_proposal(self, backtest):
         assert by_id(backtest)["runner-a:2026-09-21:0"]["proposal"] is None
