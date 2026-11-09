@@ -77,7 +77,7 @@ async def test_local_benchmark_end_to_end():
 
     # Verify local benchmark is detected
     assert runner._is_local_benchmark("127.0.0.1"), "Should detect local benchmark"
-    assert not runner._is_local_benchmark("172.31.38.30"), "Should not detect remote as local"
+    assert not runner._is_local_benchmark("198.51.100.30"), "Should not detect remote as local"
 
     print("Local benchmark detection working correctly")
 

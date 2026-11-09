@@ -133,8 +133,8 @@ class TestHostFields:
 
     def test_boot_id_reads_the_file(self, tmp_path):
         path = tmp_path / "boot_id"
-        path.write_text("790c2972-0361-4349-b4e5-65d59f734c2e\n")
-        assert ri._boot_id(path) == "790c2972-0361-4349-b4e5-65d59f734c2e"
+        path.write_text("dddddddd-eeee-aaaa-dddd-bbbbbbbbbbbb\n")
+        assert ri._boot_id(path) == "dddddddd-eeee-aaaa-dddd-bbbbbbbbbbbb"
         assert ri._boot_id(tmp_path / "missing") is None
 
 
@@ -271,16 +271,16 @@ class TestRemoteEnvironment:
             server_cls.return_value.collect_host_environment = AsyncMock(
                 return_value={"boot_id": "1111-2222", "kernel_release": "6.1"}
             )
-            env = await TaskRunner._server_environment(SimpleNamespace(ip="127.0.0.1", username="ec2-user"))
+            env = await TaskRunner._server_environment(SimpleNamespace(ip="127.0.0.1", username="operator"))
             assert env["same_host"] is True
             server_cls.return_value.collect_host_environment = AsyncMock(
                 return_value={"boot_id": "9999", "kernel_release": "6.1"}
             )
-            env = await TaskRunner._server_environment(SimpleNamespace(ip="172.31.44.174", username="ec2-user"))
+            env = await TaskRunner._server_environment(SimpleNamespace(ip="198.51.100.44", username="operator"))
             assert env["same_host"] is False
             server_cls.return_value.collect_host_environment = AsyncMock(side_effect=OSError("ssh down"))
             assert (
-                await TaskRunner._server_environment(SimpleNamespace(ip="172.31.44.174", username="ec2-user")) is None
+                await TaskRunner._server_environment(SimpleNamespace(ip="198.51.100.44", username="operator")) is None
             )
 
 

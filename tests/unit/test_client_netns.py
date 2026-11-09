@@ -37,17 +37,17 @@ def test_default_no_netns_prefix_and_localhost_target():
     assert "-h 127.0.0.1" in cmd
 
 
-@patch("conductress.tasks.task_perf_benchmark.get_primary_interface_ip", return_value="172.31.34.114")
+@patch("conductress.tasks.task_perf_benchmark.get_primary_interface_ip", return_value="198.51.100.14")
 def test_netns_prefixes_command_and_rewrites_local_target(mock_ip):
     task = _make_task(client_netns="loadgen")
     cmd = task._build_benchmark_command(_make_client(), "127.0.0.1", None)
     assert cmd.startswith("sudo ip netns exec loadgen numactl")
-    assert "-h 172.31.34.114" in cmd
+    assert "-h 198.51.100.14" in cmd
     assert "-h 127.0.0.1" not in cmd
     mock_ip.assert_called_once()
 
 
-@patch("conductress.tasks.task_perf_benchmark.get_primary_interface_ip", return_value="172.31.34.114")
+@patch("conductress.tasks.task_perf_benchmark.get_primary_interface_ip", return_value="198.51.100.14")
 def test_netns_keeps_explicit_remote_target(mock_ip):
     """A non-local target is used as-is — only localhost needs rewriting."""
     task = _make_task(client_netns="loadgen")
@@ -57,7 +57,7 @@ def test_netns_keeps_explicit_remote_target(mock_ip):
     mock_ip.assert_not_called()
 
 
-@patch("conductress.tasks.task_perf_benchmark.get_primary_interface_ip", return_value="172.31.34.114")
+@patch("conductress.tasks.task_perf_benchmark.get_primary_interface_ip", return_value="198.51.100.14")
 def test_netns_applies_to_cpu_override_branch(mock_ip):
     task = _make_task(client_netns="loadgen")
     task.benchmark_cpu_override = "4,5,6"
@@ -65,7 +65,7 @@ def test_netns_applies_to_cpu_override_branch(mock_ip):
     client._cpu_allocator.get_numa_nodes_for_cpus.return_value = [0]
     cmd = task._build_benchmark_command(client, "127.0.0.1", None)
     assert cmd.startswith("sudo ip netns exec loadgen numactl --physcpubind=4,5,6")
-    assert "-h 172.31.34.114" in cmd
+    assert "-h 198.51.100.14" in cmd
 
 
 def test_netns_preflight_message_mentions_setup_paths():

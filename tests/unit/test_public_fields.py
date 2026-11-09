@@ -20,12 +20,12 @@ PRIVATE_ENV = {
     "conductress_revision": SHA_B,
     "cachecannon_commit": "31a2befaa8bf7b3b7a7f7e03e2a847a2e407a3ce",
     "cachecannon_dirty": False,
-    "boot_id": "86bc23db-f6bc-49fa-82b7-f48d801a298b",
-    "instance_id": "i-0690c81234ab4ecb8",
-    "host_fingerprint": "c4c46be36d50f57d",
+    "boot_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+    "instance_id": "i-0123456789abcdef0",
+    "host_fingerprint": "0123456789abcdef",
     "packages": {"glibc": "2.34-231.0.5.amzn2023", "kernel": "6.1.189-236.400.amzn2023"},
     "server_kernel_release": "6.18.56",
-    "server_boot_id": "3024bc08-85b7-4046-918b-67ae3ff77c13",
+    "server_boot_id": "66666666-7777-8888-9999-aaaaaaaaaaaa",
 }
 
 # Shapes a public file must never contain (the live-file grep after a deploy
@@ -76,8 +76,8 @@ class TestPublicChangeLabel:
             f"conductress_revision: '{SHA_A}' -> '{SHA_B}'",
             "cachecannon_commit: 'aaaa' -> 'bbbb'",
             "glibc_version: '2.34' -> '2.35'",
-            "host_fingerprint: 'c4c46be36d50f57d' -> 'ffff'",
-            "instance_id: 'i-0690c81234ab4ecb8' -> 'i-0fedcba9876543210'",
+            "host_fingerprint: '0123456789abcdef' -> 'ffff'",
+            "instance_id: 'i-0123456789abcdef0' -> 'i-0fedcba9876543210'",
             "kernel_release: '6.1.170-213' -> '6.1.189-236'",
             "packages.glibc: '2.34-231.0.4' -> '2.34-231.0.5'",
             "some_new_field: 'x' -> 'y'",
@@ -100,7 +100,7 @@ class TestPublicChangeLabel:
 
 class TestPublicGeneration:
     def test_drops_the_operator_name(self):
-        generation = {"id": "2026-11-06", "epoch": "v3", "label": "kernel 6.1.170 -> 6.1.189", "closed_by": "rain"}
+        generation = {"id": "2026-11-06", "epoch": "v3", "label": "kernel 6.1.170 -> 6.1.189", "closed_by": "operator"}
         assert pf.public_generation(generation) == {
             "epoch": "v3",
             "id": "2026-11-06",
@@ -162,7 +162,7 @@ class TestPublicCanaryStatus:
 
     def test_unknown_keys_are_dropped_and_reported(self):
         entry = _entry()
-        entry["operator_login"] = "rain"
+        entry["operator_login"] = "operator"
         entry["latest_observation"]["raw_row"] = {"host": "10.0.0.1"}
         entry["series"]["latest_observation"]["db_path"] = "/var/lib/x.db"
         status = {"generated_at": "t", "runners": [entry], "debug": {"pid": 1}}
@@ -196,7 +196,7 @@ class TestFieldClassification:
 
 class TestPublicText:
     def test_withholds_private_shapes(self):
-        for text in (SHA_A, "on 10.0.0.1", "see /home/someone/x", "mail a@b.example", "i-0690c81234ab4ecb8"):
+        for text in (SHA_A, "on 10.0.0.1", "see /home/someone/x", "mail a@b.example", "i-0123456789abcdef0"):
             assert pf.public_text(f"note {text}") == pf.WITHHELD
         assert pf.private_detail("plain words") is None
 

@@ -74,7 +74,7 @@ def test_manifest_notes_drop_the_recorder_and_check_text(tmp_path):
             {
                 "events": [
                     {"at": "2026-11-06T16:14:23Z", "label": "update", "fields": ["glibc"], "recorded_by": "someone"},
-                    {"at": "2026-11-07T00:00:00Z", "label": "host 10.1.1.1", "recorded_by": "someone"},
+                    {"at": "2026-11-07T00:00:00Z", "label": "host 10.0.1.1", "recorded_by": "someone"},
                     {"at": "not a time", "label": "bad"},
                 ],
                 "explanations": [{"event_date": "2026-09-21", "text": "known", "recorded_by": "someone"}],
