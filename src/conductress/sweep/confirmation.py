@@ -41,6 +41,8 @@ fields only).
 
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import json
 import logging
 import math
@@ -49,7 +51,7 @@ import zlib
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Iterable, Optional, Sequence
+from typing import Any, Iterable, Iterator, Optional, Sequence
 
 from conductress import config
 from conductress.public_fields import check_public_text, public_change_label, public_text
@@ -332,6 +334,26 @@ def save_state(state: dict[str, Any], path: Optional[Path] = None) -> None:
     os.replace(temporary, path)
 
 
+@contextlib.contextmanager
+def state_lock(path: Optional[Path] = None) -> Iterator[None]:
+    """Hold an exclusive lock on the state file for one read-modify-write.
+
+    The runner rewrites the state between tasks and an operator's ``sweep
+    confirm`` writes it too; both take this lock (``<state>.lock``, an advisory
+    ``flock``) around load, change and save, so neither write is lost. The
+    lock file is never removed: removing it while another process waits would
+    let two holders in.
+    """
+    path = path or default_state_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path.with_suffix(path.suffix + ".lock"), "a", encoding="utf-8") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
 def open_run(state: dict[str, Any]) -> Optional[dict[str, Any]]:
     return next((r for r in state["runs"] if r.get("status") in OPEN_STATUSES), None)
 
@@ -378,20 +400,18 @@ def request_run(
 ) -> dict[str, Any]:
     """The operator command: record a requested run for the event at ``at``. The label is public."""
     clean = check_public_text(label, "label")
-    state = load_state(path)
-    run = new_run(
-        state,
-        event_at=at,
-        label=clean,
-        trigger=TRIGGER_OPERATOR,
-        budget=budget,
-        now=now or datetime.now(timezone.utc),
-    )
-    # shortcut: read-modify-write without a lock; the runner rewrites this file
-    # between tasks, so a request written in that same instant can be lost.
-    # Upgrade to a lock file if operators request runs often.
-    if not dry_run:
-        save_state(state, path)
+    with state_lock(path):
+        state = load_state(path)
+        run = new_run(
+            state,
+            event_at=at,
+            label=clean,
+            trigger=TRIGGER_OPERATOR,
+            budget=budget,
+            now=now or datetime.now(timezone.utc),
+        )
+        if not dry_run:
+            save_state(state, path)
     return run
 
 
@@ -446,6 +466,10 @@ class ConfirmationCoordinator:
         return next((s for s in self.sources if s.workload_id == workload), None)
 
     def on_queue_empty(self) -> None:
+        with state_lock(self.state_path):
+            self._on_queue_empty_locked()
+
+    def _on_queue_empty_locked(self) -> None:
         """Queue the next cell of the open run, if there is one and none is queued."""
         state = load_state(self.state_path)
         run = open_run(state)
@@ -539,6 +563,10 @@ class ConfirmationCoordinator:
             self._finish(run, None)
 
     def on_task_completed(self, task: Any) -> None:
+        with state_lock(self.state_path):
+            self._on_task_completed_locked(task)
+
+    def _on_task_completed_locked(self, task: Any) -> None:
         state = load_state(self.state_path)
         row = find_row(self.results_file, task.task_id)
         if row is not None:
@@ -560,6 +588,10 @@ class ConfirmationCoordinator:
         save_state(state, self.state_path)
 
     def on_task_failed(self, task: Any) -> None:
+        with state_lock(self.state_path):
+            self._on_task_failed_locked(task)
+
+    def _on_task_failed_locked(self, task: Any) -> None:
         run_id = getattr(task, "confirm_run_id", "")
         if not run_id:
             return

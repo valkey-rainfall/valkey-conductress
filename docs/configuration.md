@@ -412,7 +412,10 @@ bisects, never adds a point to a series and never moves a generation: its
 cells carry no `sweep_commit` and the note `[confirm-v3:<source>/<series>]`,
 and their result rows carry `sample: "confirm"` and `confirm_run_id`.
 
-Files: `sweep_data/confirm_runs.json` (runner state, private) and, published,
+Files: `sweep_data/confirm_runs.json` (runner state, private; the runner and
+`sweep confirm` take an exclusive lock on `confirm_runs.json.lock` around each
+read-modify-write, so a request made while the runner writes is not lost)
+and, published,
 `confirm-<platform>.epoch-v3.json` with one entry per run: `run_id,
 event_at, label, trigger, budget, status, floor_pct, pairs_done, effect_pct,
 ci_pct, started_at, ended_at` and `pairs` (`workload, metric, commit, before,
