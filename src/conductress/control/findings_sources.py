@@ -134,6 +134,7 @@ def _paired_for_generation(sweep_dir: Path, label: str, epoch: str, generation: 
                 before=tuple(before[c] for c in commits),  # type: ignore[misc]
                 after=tuple(after[c] for c in commits),  # type: ignore[misc]
                 lower_is_better=metric == "latency",
+                from_generation=True,
             )
         )
     return out

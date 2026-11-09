@@ -27,6 +27,11 @@ Rules (also in ``docs/canary-drift-analysis.md``, "Findings"):
   sign flips.
 - Benjamini-Hochberg over every test in one analysis.
 - Floor per runner: ``max(0.5%, 3 x robust sd of the canary before window)``.
+- Minimum data: 7 days before and 3 after to confirm; a flat event (interval
+  inside the floor) can be cleared with 4 before, 3 after and 10 in total, so
+  an event soon after a located step or at the start of the history is not
+  left as "not enough data" for good. The noise of a short before window
+  comes from the after window.
 - States: ``confirmed``, ``suspected``, ``insufficient-data``, ``cleared``
   (``below_floor_shift`` when significant but inside the floor),
   ``explained`` (an operator explanation exists) and, for one-day fleet-wide
@@ -193,6 +198,9 @@ class PairedSeries:
     before: tuple[float, ...]
     after: tuple[float, ...]
     lower_is_better: bool = False
+    # True for the pairs of a closed series generation: the generation that the
+    # page could propose to close already exists.
+    from_generation: bool = False
 
 
 @dataclass(frozen=True)
@@ -220,8 +228,13 @@ class FindingsConfig:
     floor_min: float = 0.005
     floor_sd: float = 3.0
     window: int = 28
-    min_before: int = 7
+    min_before: int = 7  # days before an event to CONFIRM it (and to locate a step)
     min_after: int = 3
+    # A flat event can be CLEARED with fewer days before it (an event soon after a located step, or
+    # at the start of the history) when the interval is still inside the floor: at least this many
+    # days before, min_after after, and this many in total.
+    min_before_clear: int = 4
+    min_total_clear: int = 10
     min_pairs: int = 5
     alpha: float = 0.05
     locate_p: float = 0.01
@@ -461,13 +474,24 @@ def split_gain(x: Sequence[float], pos: int, cuts: Sequence[int]) -> float:
 
 
 def runner_floor(x: Sequence[float], pos: int, cuts: Sequence[int], cfg: FindingsConfig) -> tuple[float, float]:
-    """``(floor, robust sd)`` as fractions, from the before window (in-segment, else the prior days)."""
-    before, _ = windows(x, pos, cuts, cfg)
-    if len(before) < cfg.min_before:
-        before = list(x[max(0, pos - cfg.window) : pos])
-    if len(before) < cfg.min_before:
+    """``(floor, robust sd)`` as fractions: ``max(floor_min, floor_sd x robust sd)``.
+
+    The noise comes from the in-segment before window. When that window is
+    short (an event soon after a located step, or at the start of the
+    history), it comes from the in-segment after window instead: the noise of
+    the new level, which a step at this event does not inflate. Only when both
+    are short does it fall back to the days before the event, which may cross
+    a located step.
+    """
+    before, after = windows(x, pos, cuts, cfg)
+    sample = before
+    if len(sample) < cfg.min_before:
+        sample = after
+    if len(sample) < cfg.min_before:
+        sample = list(x[max(0, pos - cfg.window) : pos])
+    if len(sample) < cfg.min_before:
         return cfg.floor_min, float("nan")
-    sd = robust_sd(before) / float(np.median(before))
+    sd = robust_sd(sample) / float(np.median(sample))
     return max(cfg.floor_min, cfg.floor_sd * sd), sd
 
 
@@ -508,17 +532,34 @@ def locate_steps(runner_id: str, x: Sequence[float], events: Sequence[Event], cf
 
 
 def _state(test: dict[str, Any], cfg: FindingsConfig) -> str:
+    """The state of one test (rules in the module docstring); sets ``test["reason"]`` for insufficient data."""
     lo, hi = test["ci_lo"], test["ci_hi"]
-    if not test["enough"]:
-        return STATE_INSUFFICIENT
     floor = test["floor"]
-    if test["q"] < cfg.alpha and (lo > 0 or hi < 0) and abs(test["effect"]) >= floor:
+    test["reason"] = None
+    can_clear = test.get("enough_to_clear", test["enough"])
+    if not test["enough"] and not can_clear:
+        test["reason"] = _shortfall(test, cfg)
+        return STATE_INSUFFICIENT
+    significant = test["q"] < cfg.alpha and (lo > 0 or hi < 0) and abs(test["effect"]) >= floor
+    if significant and test["enough"]:
         return STATE_CONFIRMED
     if -floor <= lo and hi <= floor:
         return STATE_CLEARED
-    if test["p"] < cfg.alpha or abs(test["effect"]) >= 2 * floor:
+    if test["enough"] and (test["p"] < cfg.alpha or abs(test["effect"]) >= 2 * floor):
         return STATE_SUSPECTED
-    return STATE_INSUFFICIENT  # no signal, but the interval is still too wide to clear
+    test["reason"] = _shortfall(test, cfg) if not test["enough"] else "interval too wide to clear"
+    return STATE_INSUFFICIENT
+
+
+def _shortfall(test: dict[str, Any], cfg: FindingsConfig) -> str:
+    """Which minimum a test misses, in words for the page."""
+    if test["kind"] == "paired":
+        return f"{test['n_after']} pair(s), needs {cfg.min_pairs}"
+    if test["n_after"] < cfg.min_after:
+        return f"{test['n_after']} day(s) after the event, needs {cfg.min_after}"
+    if test["n_before"] < cfg.min_before_clear:
+        return f"{test['n_before']} day(s) before the event, needs {cfg.min_before_clear}"
+    return f"{test['n_before']} day(s) before the event, needs {cfg.min_before} to confirm"
 
 
 def _severity(test: dict[str, Any]) -> float:
@@ -572,6 +613,9 @@ def _canary_test(analysis: _RunnerAnalysis, event: Event, cfg: FindingsConfig) -
         "ci_hi": float("nan"),
         "p": 1.0,
         "enough": len(before) >= cfg.min_before and len(after) >= cfg.min_after,
+        "enough_to_clear": len(before) >= cfg.min_before_clear
+        and len(after) >= cfg.min_after
+        and len(before) + len(after) >= cfg.min_total_clear,
         "cut": pos in analysis.cuts,
     }
     if before and after:
@@ -611,6 +655,7 @@ def _paired_tests(analysis: _RunnerAnalysis, cfg: FindingsConfig) -> list[dict[s
             "sd": sd,
             "enough": n >= cfg.min_pairs,
             "lower_is_better": paired.lower_is_better,
+            "from_generation": paired.from_generation,
             "effect": float("nan"),
             "ci_lo": float("nan"),
             "ci_hi": float("nan"),
@@ -734,6 +779,7 @@ def _public_test(test: dict[str, Any]) -> dict[str, Any]:
         "state": test["state"],
         "below_floor_shift": test.get("below_floor_shift", False),
         "severity": _num(test["severity"], 3),
+        "reason": test.get("reason"),
     }
     if test["kind"] == "canary":
         out["n_after_strict"] = test["n_after_strict"]
@@ -973,7 +1019,13 @@ def build_findings(
             step = steps_by_pos.get(event.position)
             fields = _public_changes(event)
             n_fields = len({f["label"] for f in fields})
-            proposal = _proposal(event, analysis.runner.display_name) if state == STATE_CONFIRMED else None
+            # No proposal when a closed generation already cuts the series at this event.
+            generation_closed = any(t["kind"] == "paired" and t.get("from_generation") for t in tests)
+            proposal = (
+                _proposal(event, analysis.runner.display_name)
+                if state == STATE_CONFIRMED and not generation_closed and explanation is None
+                else None
+            )
             events_out.append(
                 {
                     "event_id": event.event_id,
@@ -993,6 +1045,8 @@ def build_findings(
                     "manual_labels": [t for t in (public_text(m.label) for m in event.manual) if t],
                     "state": shown_state,
                     "state_before_explanation": state if explanation is not None else None,
+                    "reason": canary.get("reason") if state == STATE_INSUFFICIENT else None,
+                    "generation_closed": generation_closed,
                     "below_floor_shift": bool(canary.get("below_floor_shift")),
                     "severity": round(lead["severity"], 3),
                     "confidence": round(1.0 - lead["q"], 4),
