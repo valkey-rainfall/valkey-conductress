@@ -283,14 +283,37 @@ manual decision described under "Series generations".
 
 Manual events live in `sweep_data/environment_events.json`, next to
 `generations.json`, for changes the provenance fields cannot see (a BIOS
-update, a known hardware event):
+update, a package release that keeps the library version string). Record
+them with the CLI, which checks the text and writes the file atomically:
 
 ```
-{"events": [{"at": "2026-11-06T18:09:40Z", "label": "intelbench reboot after the OS update"}]}
+conductress sweep add-event --at 2026-11-06T16:14:23Z --until 2026-11-06T18:21:58Z \
+    --label "package update and reboot" --fields glibc,microcode_ctl,reboot
+conductress sweep explain-event --date 2026-09-21 --text "calibration-period harness deploys"
+```
+
+The file then holds:
+
+```
+{"schema_version": 1,
+ "events": [{"at": "2026-11-06T16:14:23Z", "until": "2026-11-06T18:21:58Z",
+             "label": "package update and reboot", "fields": ["glibc", "microcode_ctl", "reboot"],
+             "recorded_at": "...", "recorded_by": "operator"}],
+ "explanations": [{"event_date": "2026-09-21", "text": "calibration-period harness deploys",
+                   "recorded_at": "...", "recorded_by": "operator"}]}
 ```
 
 A point measured at or after an event's `at` starts a period labelled with
 the event. The manifest `version` is 4 since periods and generations exist.
+The live manifest also publishes `environment_events` and `explanations`
+without `recorded_at` and `recorded_by`; the canary findings on the data host
+read them (see "Findings" in `docs/canary-drift-analysis.md`). Labels and
+texts are PUBLIC: the CLI refuses text that looks like a revision id, an IP
+address, an absolute path, an e-mail address or an instance id. The older
+form of the file, a bare list of `{at, label}`, is still read. Published
+generation entries carry only `id, epoch, until, live_from, label, reason,
+workloads, excluded_tasks, closed_at, archived`; who closed a generation
+stays on the runner.
 
 ### Series generations
 

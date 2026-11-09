@@ -517,24 +517,15 @@ def _build_periods(points: list[dict[str, Any]], events: Optional[list[dict[str,
 def load_environment_events(path: Optional[Path] = None) -> list[dict[str, Any]]:
     """Manual environment events (``sweep_data/environment_events.json``): ``[{at, label}]``.
 
-    ``at`` is an ISO 8601 UTC instant. Written by hand next to generations.json
-    for changes the provenance fields cannot see (a known hardware event, a
-    BIOS update). Missing file: no events.
+    ``at`` is an aware UTC datetime. Written next to generations.json by
+    ``conductress sweep add-event`` (see ``sweep/environment_events.py``) for
+    changes the provenance fields cannot see. Missing file: no events.
     """
-    from datetime import datetime, timezone
+    from conductress.sweep.environment_events import load_document, parse_utc
 
-    from conductress.config import SWEEP_STATE_DIR
-
-    path = path or (SWEEP_STATE_DIR / "environment_events.json")
-    if not path.exists():
-        return []
-    data = json.loads(path.read_text(encoding="utf-8"))
-    events = data.get("events", []) if isinstance(data, dict) else data
     parsed = []
-    for event in events:
-        at = datetime.fromisoformat(str(event["at"]).replace("Z", "+00:00"))
-        at = at.replace(tzinfo=timezone.utc) if at.tzinfo is None else at.astimezone(timezone.utc)
-        parsed.append({"at": at, "label": str(event.get("label", ""))})
+    for event in load_document(path)["events"]:
+        parsed.append({"at": parse_utc(event["at"]), "label": str(event.get("label", ""))})
     return parsed
 
 
@@ -1148,6 +1139,8 @@ def export_manifest(
     epochs: Optional[list[dict[str, str]]] = None,
     generations: Optional[list[dict[str, Any]]] = None,
     generation: Optional[dict[str, Any]] = None,
+    environment_events: Optional[list[dict[str, Any]]] = None,
+    explanations: Optional[list[dict[str, Any]]] = None,
 ) -> None:
     """Write a per-platform manifest for one measurement epoch.
 
@@ -1160,6 +1153,11 @@ def export_manifest(
     history; a live manifest with none carries an empty list.  ``generation``
     marks the manifest of one closed generation itself: the file gets a
     ``.gen-<id>`` suffix and the entry is stored under ``generation``.
+    Both pass :func:`public_generation` (no recorder, checked text).
+
+    ``environment_events`` and ``explanations`` are the operator notes of
+    ``sweep/environment_events.py`` (``manifest_notes``), read by the canary
+    findings on the data host.
     """
     from conductress.publisher import detect_platform
 
@@ -1192,6 +1190,8 @@ def export_manifest(
         + PERF_GROUPS
         + PER_THREAD_PERF_GROUPS,
         "generations": [public_generation(g) for g in (generations or [])],
+        "environment_events": list(environment_events or []),
+        "explanations": list(explanations or []),
     }
     output_dir.mkdir(parents=True, exist_ok=True)
     filename = f"manifest-{platform_id}.json" if epoch_id == "v1" else f"manifest-{platform_id}.epoch-{epoch_id}.json"

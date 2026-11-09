@@ -12,6 +12,12 @@ decides what a public file may carry:
 - ``public_change_label`` turns a change list (``key: 'old' -> 'new'``) into a
   public sentence: version fields keep their values, private fields become the
   TYPE of change ("harness revision changed", "reboot", "host replaced");
+- ``public_value_key`` / ``change_type_label`` classify one field the same
+  way, for documents that list changes field by field (the canary findings);
+- ``public_text`` / ``check_public_text`` guard operator-written text (labels,
+  explanations): text that looks like a revision id, an IP address, an
+  absolute path, an e-mail address or an instance id is refused by the
+  writers and withheld by the publishers;
 - ``public_canary_entry`` / ``public_canary_status`` are the allowlist
   serializers for the canary status files. A key outside the allowlist is
   dropped, never copied; ``unknown_canary_keys`` lists such keys so a test can
@@ -22,6 +28,7 @@ Allowlist, not denylist: a field nobody has looked at is private by default.
 
 from __future__ import annotations
 
+import re
 from typing import Any, Dict, Iterable, List, Optional
 
 # Environment keys whose VALUES are public: distribution package versions, the
@@ -51,6 +58,7 @@ _CHANGE_TYPE_LABELS = {
     "server_boot_id": "server reboot",
     "conductress_revision": "harness revision changed",
     "cachecannon_commit": "load generator changed",
+    "cachecannon_sha256": "load generator changed",
     "server_conductress_revision": "server harness revision changed",
     "instance_id": "host replaced",
     "host_fingerprint": "host replaced",
@@ -61,6 +69,16 @@ _CHANGE_TYPE_LABELS = {
 }
 
 EVENT_PREFIX = "event: "
+
+
+def public_value_key(key: str) -> bool:
+    """Whether the VALUE of environment field ``key`` may be published (``packages.<name>`` included)."""
+    return key in PUBLIC_ENVIRONMENT_KEYS or key.startswith("packages.") or key.startswith("server_packages.")
+
+
+def change_type_label(key: str) -> str:
+    """The public words for a change of ``key`` when its value is not public ("reboot", "host replaced")."""
+    return _CHANGE_TYPE_LABELS.get(key, f"{key} changed")
 
 
 def public_environment(environment: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
@@ -92,13 +110,11 @@ def public_change_label(changes: Iterable[str], max_value_chars: int = 24) -> st
             phrase = change[len(EVENT_PREFIX) :].strip()
         else:
             key, _, rest = change.partition(": ")
-            if key in _CHANGE_TYPE_LABELS:
-                phrase = _CHANGE_TYPE_LABELS[key]
-            elif key in PUBLIC_ENVIRONMENT_KEYS or key.startswith("packages.") or key.startswith("server_packages."):
+            if key in _CHANGE_TYPE_LABELS or not public_value_key(key):
+                phrase = change_type_label(key)
+            else:
                 old_v, _, new_v = rest.partition(" -> ")
                 phrase = f"{key}: {_clip(old_v, max_value_chars)} -> {_clip(new_v, max_value_chars)}"
-            else:
-                phrase = f"{key} changed"
         if phrase and phrase not in parts:
             parts.append(phrase)
     return "; ".join(parts)
@@ -124,8 +140,61 @@ PUBLIC_GENERATION_KEYS = frozenset(
 
 
 def public_generation(generation: Dict[str, Any]) -> Dict[str, Any]:
-    """A manifest's generation entry without ``closed_by`` (an operator's name)."""
-    return {key: generation[key] for key in sorted(generation) if key in PUBLIC_GENERATION_KEYS}
+    """A manifest's generation entry without ``closed_by`` (an operator's name), its free text checked."""
+    public = {key: generation[key] for key in sorted(generation) if key in PUBLIC_GENERATION_KEYS}
+    for key in ("label", "reason"):
+        if isinstance(public.get(key), str):
+            public[key] = public_text(public[key]) or ""
+    return public
+
+
+# ------------------------------------------------------------- operator text
+
+WITHHELD = "(text withheld: it failed the public text check)"
+
+_TEXT_PATTERNS = (
+    ("a 40-character revision id", re.compile(r"\b[0-9a-f]{40}\b", re.IGNORECASE)),
+    ("an IPv4 address", re.compile(r"\b\d{1,3}(?:\.\d{1,3}){3}\b")),
+    (
+        "an absolute system or home path",
+        re.compile(r"(?:^|[\s'\"(=])/(?:home|etc|opt|var|root|tmp|usr|local)/", re.IGNORECASE),
+    ),
+    ("an e-mail address", re.compile(r"\b[\w.+-]+@[\w-]+\.[\w.-]+\b")),
+    ("a cloud instance id", re.compile(r"\bi-[0-9a-f]{8,17}\b")),
+)
+
+
+def private_detail(text: str) -> Optional[str]:
+    """What private detail ``text`` seems to hold, or None when it holds none."""
+    for what, pattern in _TEXT_PATTERNS:
+        if pattern.search(text):
+            return what
+    return None
+
+
+def public_text(text: Optional[str], *, max_chars: int = 300) -> Optional[str]:
+    """``text`` (whitespace normalised, cut to ``max_chars``) when safe, :data:`WITHHELD` when not, None for none."""
+    if text is None:
+        return None
+    value = " ".join(str(text).split())
+    if not value:
+        return None
+    if private_detail(value) is not None:
+        return WITHHELD
+    return value[:max_chars]
+
+
+def check_public_text(text: str, what: str, *, max_chars: int = 300) -> str:
+    """The normalised text, or ValueError naming the problem (for the writing commands)."""
+    value = " ".join(str(text).split())
+    if not value:
+        raise ValueError(f"{what} must not be empty")
+    if len(value) > max_chars:
+        raise ValueError(f"{what} is longer than {max_chars} characters")
+    detail = private_detail(value)
+    if detail is not None:
+        raise ValueError(f"{what} looks like it holds {detail}; it is published, so write it for a public reader")
+    return value
 
 
 # ----------------------------------------------------------------- canary files
