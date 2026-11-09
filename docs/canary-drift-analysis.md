@@ -314,3 +314,86 @@ distinct command values per scope:
 - `actionable` is always false -- no automated alerts
 - Candidate signals are informational only
 - Calibration reports require human review before enabling thresholds
+
+## Findings
+
+`control/findings.py` turns the canary history into ranked environment
+EVENTS for the dashboard's canary page; `control/findings_sources.py` gathers
+its inputs; the service publishes `canary/findings.json` and
+`canary/consistency.json` (`docs/control-service.md`, "Canary findings").
+Inputs per live runner: its accepted observations and those of its archives
+(stitched, oldest first; the profile version is added to the environment),
+the manual events and explanations of its platform's sweep manifest, and the
+paired evidence of its closed series generations (the same commit and
+workload measured before and after the cut).
+
+### Events
+
+Every recorded field change between two consecutive accepted observations of
+one runner, plus every manual event whose `at` falls in that gap, is ONE
+event, identified as `<runner>:<date of the first observation after the
+gap>:0`. No fixed-commit measurement lies between them, so no data can
+separate them: the page attributes the effect to the event as a whole and
+says so when several fields changed together. Identity fields (`runner_id`,
+`platform`) are ignored, and a field that a newer provenance schema adds is
+not a change. Kinds, first match wins: host replaced, kernel or firmware,
+system library, load generator, canary profile, reboot only, harness
+revision, manual, other change.
+
+### Statistics
+
+- Step location: robust binary segmentation restricted to event positions.
+  Each round takes the event with the best L1 cost reduction
+  (`sum |x - median|`) of its segment and accepts it as a step when the test
+  below gives p < 0.01, `|effect|` reaches the runner floor, and the windows
+  hold at least 7 days before and 3 after. Events whose split gains at least
+  90% of an accepted step's gain are listed as alternative locations.
+- Windows: before = up to 28 observations back to the previous accepted
+  step, after = up to 28 observations up to the next accepted step. Later
+  unaccepted events do not cut the window (harness deploys every few days
+  would otherwise leave 1-day windows); the strict variant, cut at the next
+  event of any kind, is reported beside it.
+- Canary test: effect = median(after) / median(before) - 1, 95% bootstrap CI
+  (10,000 resamples of both windows), two-sided Mann-Whitney by permutation
+  of the rank sum (20,000 splits).
+- Paired test: median of per-pair log ratios, bootstrap CI over pairs,
+  Wilcoxon signed-rank by sign flips, share of pairs in the same direction.
+- Benjamini-Hochberg over every test of one analysis.
+- Floor per runner: `max(0.5%, 3 x robust sd)` of the canary before window
+  (in-segment, else the 28 prior days).
+- Cross-runner: the effect on every other runner over the same dates, in
+  robust sd.
+- Fleet: harness deploys on at least 3 runners within 48 h get one pooled
+  row, Stouffer `Z = sum(z_i) / sqrt(k)` of the strict effects.
+- Seeds come from the test identity, so a re-analysis publishes the same
+  numbers.
+
+### States and ranking
+
+| State | Rule |
+|---|---|
+| `confirmed` | at least 7 days before and 3 after (5 pairs for paired); q < 0.05; CI excludes 0; `|effect| >=` floor |
+| `cleared` | CI inside +/- floor (`below_floor_shift: true` when q < 0.05 all the same) |
+| `suspected` | otherwise, when p < 0.05 or `|effect| >=` 2 x floor |
+| `insufficient-data` | minimum data not met, or no signal and the CI still too wide to clear |
+| `explained` | an operator explanation exists for the event date (`conductress sweep explain-event`) |
+| `suspected-fleet` | pooled fleet row with `|Z| >= 3`, at least 3 runners and 75% in one direction, and fewer than 3 days after the deploy on some runner |
+
+An event takes the most serious state of its primary evidence (the canary,
+and paired series with enough pairs); the canary leads the headline when it
+has enough data. Severity = `|CI bound nearest 0| x (1 - q)` in percent, 0
+when the CI holds 0. Order: confirmed, suspected, insufficient-data,
+suspected-fleet, explained, cleared, then severity, then newest first.
+`open_count` counts confirmed and suspected only. A pooled fleet row with too
+little data is listed only for the latest deploy. A confirmed event carries a
+`proposal`: the generation close a PERSON may perform; nothing does it
+automatically.
+
+### Published values
+
+The findings use the same allowlist as every public file
+(`conductress/public_fields.py`): a field keeps its old and new values only
+when `public_value_key` allows them (kernel, glibc, microcode, CPU model,
+machine, package versions); every other field is published as the type of
+change from `change_type_label` ("harness revision changed", "reboot", "host
+replaced"). Operator text passes `public_text`.
