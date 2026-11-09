@@ -485,3 +485,66 @@ class TestRetireStatusTimer:
         assert "OnUnitActiveSec" not in source
         assert "enable --now conductress-status.timer" not in source
         assert "await retire_status_timer(host)" in source
+
+
+class TestRunnerServiceOnlyOnRunnerHosts:
+    """update_host installs the runner unit on runner hosts only.
+
+    A servers.json entry for another machine is a benchmark server (role
+    "server" by default); a runner unit there crash loops and takes CPU from
+    the measured server, so the bootstrap must not install it.
+    """
+
+    STEPS = (
+        "update_rhel_packages",
+        "update_ubuntu_packages",
+        "update_amazon_packages",
+        "ensure_conductress",
+        "update_pip_packages",
+        "ensure_file_descriptor_limits",
+        "ensure_io_uring_enabled",
+        "ensure_git_repo_cloned",
+        "ensure_memtier",
+        "ensure_cachecannon",
+        "ensure_tls_test_certs",
+        "cleanup_legacy_build_cache",
+        "install_systemd_service",
+        "retire_status_timer",
+    )
+
+    async def _update(self, server_info):
+        import conductress.bootstrap as bootstrap_module  # pylint: disable=import-outside-toplevel
+        from conductress import config  # pylint: disable=import-outside-toplevel
+
+        host = MagicMock()
+        host.get_linux_distro = AsyncMock(return_value="Amazon Linux")
+        mocks = {name: AsyncMock() for name in self.STEPS}
+        with (
+            patch.object(bootstrap_module.Host, "from_server_info", AsyncMock(return_value=host)),
+            patch.multiple(bootstrap_module, **mocks),
+        ):
+            await bootstrap_module.update_host(config.ServerInfo(**server_info))
+        return mocks, host
+
+    @pytest.mark.asyncio
+    async def test_remote_benchmark_server_gets_no_runner_unit(self):
+        mocks, host = await self._update({"ip": "198.51.100.44", "username": "operator", "name": "g4net-server"})
+        mocks["install_systemd_service"].assert_not_awaited()
+        mocks["ensure_cachecannon"].assert_awaited_once()  # the rest of the provisioning still runs
+        mocks["retire_status_timer"].assert_awaited_once()
+        assert any("role 'server'" in str(c.args[0]) for c in host.log_info_msg.call_args_list)
+
+    @pytest.mark.asyncio
+    async def test_runner_hosts_get_the_unit(self):
+        for info in (
+            {"ip": "localhost", "username": "", "name": "localhost"},
+            {"ip": "127.0.0.1", "username": "", "name": "localhost"},
+            {"ip": "198.51.100.45", "username": "operator", "name": "runner-b", "role": "runner"},
+        ):
+            mocks, _host = await self._update(info)
+            mocks["install_systemd_service"].assert_awaited_once(), info
+
+    @pytest.mark.asyncio
+    async def test_explicit_server_role_on_loopback_gets_no_unit(self):
+        mocks, _host = await self._update({"ip": "127.0.0.1", "username": "", "name": "x", "role": "server"})
+        mocks["install_systemd_service"].assert_not_awaited()

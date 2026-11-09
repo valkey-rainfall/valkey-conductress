@@ -21,7 +21,7 @@ used as a fallback when the real file is absent.
 
 | File | Purpose | Example file |
 | --- | --- | --- |
-| `servers.json` | Benchmark server list (`ip`, `username`, `name`, optional `disabled`). | `servers.default.json` |
+| `servers.json` | Benchmark server list (`ip`, `username`, `name`, optional `disabled`, optional `role`). `role` is `runner` (this machine runs the Conductress runner service) or `server` (a benchmark server only). Default: `runner` for a loopback entry, `server` for any other host. `conductress setup` installs the runner systemd unit on `runner` hosts only; a runner unit on a benchmark server crash loops and takes CPU from the measured server. | `servers.default.json` |
 | `runner.json` | This runner's stable identity (`runner_id`, `display_name`). | `runner.default.json` |
 | `repositories.json` | Optional. Extends or replaces the built-in repository list (see below). | `repositories.default.json` |
 

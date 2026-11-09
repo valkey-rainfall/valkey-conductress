@@ -222,6 +222,27 @@ class TestRemoteEnvironment:
             != env["host_fingerprint"]
         )
 
+    def test_remote_load_and_runner_unit_feed_the_busy_warning(self):
+        env = ri.parse_remote_environment(self.OUTPUT)
+        assert env["load_1m"] is None and env["runner_unit"] is None
+        assert ri.server_host_busy_warning(dict(env, same_host=False)) is None
+        busy = ri.parse_remote_environment(self.OUTPUT + "\nloadavg=11.21 7.28 1.02\nrunner_unit=activating")
+        assert busy["load_1m"] == 11.21 and busy["runner_unit"] == "activating"
+        warning = ri.server_host_busy_warning(dict(busy, same_host=False))
+        assert warning == (
+            "a Conductress runner unit is activating on the server host; 1-minute load average 11.21 > 1.0"
+        )
+        # The runner's own host is never judged (its load is the runner itself).
+        assert ri.server_host_busy_warning(dict(busy, same_host=True)) is None
+        quiet = ri.parse_remote_environment(self.OUTPUT + "\nloadavg=0.30 0.20 0.10\nrunner_unit=inactive")
+        assert ri.server_host_busy_warning(dict(quiet, same_host=False)) is None
+        assert (
+            ri.server_host_busy_warning(dict(quiet, same_host=False, load_1m=1.5)) == "1-minute load average 1.50 > 1.0"
+        )
+        assert "loadavg=$(cut" in ri.REMOTE_ENVIRONMENT_COMMAND and "systemctl is-active conductress.service" in (
+            ri.REMOTE_ENVIRONMENT_COMMAND
+        )
+
     def test_remote_packages_line_is_parsed_and_missing_rpm_is_none(self):
         env = ri.parse_remote_environment(self.OUTPUT)
         assert env["packages"] is None  # a host without rpm prints an empty value
@@ -277,7 +298,15 @@ class TestRemoteEnvironment:
                 return_value={"boot_id": "9999", "kernel_release": "6.1"}
             )
             env = await TaskRunner._server_environment(SimpleNamespace(ip="198.51.100.44", username="operator"))
-            assert env["same_host"] is False
+            assert env["same_host"] is False and env["busy_warning"] is None
+            # A runner unit crash-looping on the remote server host is recorded in the row's provenance.
+            server_cls.return_value.collect_host_environment = AsyncMock(
+                return_value={"boot_id": "9999", "kernel_release": "6.1", "runner_unit": "activating", "load_1m": 7.3}
+            )
+            env = await TaskRunner._server_environment(SimpleNamespace(ip="198.51.100.44", username="operator"))
+            assert env["busy_warning"] == (
+                "a Conductress runner unit is activating on the server host; 1-minute load average 7.30 > 1.0"
+            )
             server_cls.return_value.collect_host_environment = AsyncMock(side_effect=OSError("ssh down"))
             assert (
                 await TaskRunner._server_environment(SimpleNamespace(ip="198.51.100.44", username="operator")) is None

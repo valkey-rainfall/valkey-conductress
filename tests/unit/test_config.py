@@ -15,6 +15,34 @@ class TestServerInfo:
         s = ServerInfo(ip="1.2.3.4", disabled=True)
         assert s.disabled is True
 
+    def test_role_defaults_to_runner_on_loopback_and_server_elsewhere(self):
+        assert ServerInfo(ip="127.0.0.1").effective_role() == "runner"
+        assert ServerInfo(ip="localhost").effective_role() == "runner"
+        assert ServerInfo(ip="198.51.100.44", username="operator", name="g4net-server").effective_role() == "server"
+
+    def test_explicit_role_wins_and_is_validated(self):
+        assert ServerInfo(ip="198.51.100.44", role="runner").effective_role() == "runner"
+        assert ServerInfo(ip="127.0.0.1", role="server").effective_role() == "server"
+        with pytest.raises(ValueError, match="role must be one of"):
+            ServerInfo(ip="198.51.100.44", role="replica")
+
+    def test_role_loads_from_servers_json(self, tmp_path, monkeypatch):
+        import json
+
+        (tmp_path / "servers.json").write_text(
+            json.dumps(
+                {
+                    "valkey_servers": [
+                        {"ip": "198.51.100.44", "username": "operator", "name": "srv"},
+                        {"ip": "198.51.100.45", "username": "operator", "name": "runner-b", "role": "runner"},
+                    ]
+                }
+            )
+        )
+        monkeypatch.setattr(config_module, "PROJECT_ROOT", tmp_path)
+        roles = {s.name: s.effective_role() for s in load_server_ips()}
+        assert roles == {"srv": "server", "runner-b": "runner"}
+
 
 class TestLoadServerIps:
     def test_filters_disabled_servers(self, tmp_path, monkeypatch):

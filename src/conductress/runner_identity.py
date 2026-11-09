@@ -66,6 +66,8 @@ REMOTE_ENVIRONMENT_COMMAND = (
     "echo packages=$(rpm -q --qf '%{NAME}=%{VERSION}-%{RELEASE},' " + " ".join(PACKAGE_NAMES) + " 2>/dev/null"
     " | tr '\\n' ','); "
     "echo running_kernel=$(rpm -qf --qf '%{NAME}=%{VERSION}-%{RELEASE}' /boot/vmlinuz-$(uname -r) 2>/dev/null); "
+    "echo loadavg=$(cut -d' ' -f1-3 /proc/loadavg 2>/dev/null); "
+    "echo runner_unit=$(systemctl is-active conductress.service 2>/dev/null); "
     "echo kernel_release=$(uname -r); echo machine=$(uname -m); "
     "echo boot_id=$(cat /proc/sys/kernel/random/boot_id 2>/dev/null); "
     "echo machine_id=$(cat /etc/machine-id 2>/dev/null || cat /var/lib/dbus/machine-id 2>/dev/null); "
@@ -357,10 +359,21 @@ def parse_remote_environment(text: str) -> dict[str, Any]:
     def field(name: str) -> Optional[str]:
         return raw.get(name) or None
 
+    load_1m: Optional[float] = None
+    try:
+        load_1m = float((field("loadavg") or "").split()[0])
+    except (ValueError, IndexError):
+        load_1m = None
     env: dict[str, Any] = {
         "host_fingerprint": _host_fingerprint(
             field("instance_id"), field("machine") or "", field("hostname") or "", machine_id=field("machine_id") or ""
         ),
+        # Foreign load on the server host, read just before the task: the
+        # 1-minute load average and whether a Conductress runner unit is active
+        # there (a runner on a benchmark server competes with the measured
+        # server; see TaskRunner._server_environment).
+        "load_1m": load_1m,
+        "runner_unit": field("runner_unit"),
         "instance_id": field("instance_id"),
         "kernel_release": field("kernel_release"),
         "machine": field("machine"),
@@ -376,6 +389,33 @@ def parse_remote_environment(text: str) -> dict[str, Any]:
             packages_field.split(","), env["kernel_release"], field("running_kernel")
         )
     return env
+
+
+# A remote server host with more than this 1-minute load average before the
+# task is reported as busy (an idle benchmark server sits near 0).
+SERVER_HOST_BUSY_LOAD = 1.0
+
+
+def server_host_busy_warning(environment: dict[str, Any]) -> Optional[str]:
+    """Why a REMOTE server host looks busy before a measured task, or None.
+
+    Two signals from the host command: a Conductress runner unit that is
+    ``active`` or ``activating`` on the server (a runner on a benchmark server
+    has no local server to drive and crash loops, taking CPU from the measured
+    server), and a 1-minute load average above :data:`SERVER_HOST_BUSY_LOAD`.
+    The runner's own host (``same_host``) is never judged here: its load is
+    the runner itself.
+    """
+    if environment.get("same_host"):
+        return None
+    reasons = []
+    unit = environment.get("runner_unit")
+    if unit in ("active", "activating", "reloading"):
+        reasons.append(f"a Conductress runner unit is {unit} on the server host")
+    load = environment.get("load_1m")
+    if isinstance(load, (int, float)) and load > SERVER_HOST_BUSY_LOAD:
+        reasons.append(f"1-minute load average {load:.2f} > {SERVER_HOST_BUSY_LOAD}")
+    return "; ".join(reasons) or None
 
 
 def environment_for_period(row: dict[str, Any]) -> dict[str, Any]:
