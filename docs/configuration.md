@@ -265,9 +265,13 @@ exporter groups the ordered points of a series into environment PERIODS: a
 new period starts wherever the recorded environment differs between two
 consecutive points, judged by the same `environment_changes` rule as the
 canary annotation. `series.json` publishes `periods` (id, commit index and
-date range, the period's environment, `boot_only`, a short `label` such as
-`kernel_release: 6.1.170-... -> 6.1.189-...; cpu_microcode: ...`) and each
-point's `period`; an annotation whose two points sit in different periods is
+date range, the period's PUBLIC environment, `boot_only`, a short `label` such
+as `kernel_release: 6.1.170-... -> 6.1.189-...; cpu_microcode: ...`) and each
+point's `period`. Public means the allowlist of `public_fields.py`: package
+versions and CPU words stay; a harness or load-generator commit, a boot id or
+a host id never appear, and a change of one of them is published as its type
+(`harness revision changed`, `load generator changed`, `reboot`, `host
+replaced`). An annotation whose two points sit in different periods is
 flagged `env_period_crossed` so a reader does not blame a commit for an OS
 change. A change of boot id alone is a `boot_only` period (a reboot: a
 possible change, drawn lighter than a package or kernel change). Points

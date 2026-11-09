@@ -1146,6 +1146,58 @@ class TestCanaryAlarmSurfacing:
         assert [r["runner_id"] for r in fleet["runners"]] == ["armbench", "g4bench"]
         assert not list((tmp_path / "published" / "canary").glob("*.tmp"))
 
+    PRIVATE_ENV = {
+        "provenance_schema_version": 2,
+        "kernel_release": "6.1.189-236.400.amzn2023.aarch64",
+        "glibc_version": "2.34",
+        "conductress_revision": "9ba063dee3d204aa4c1ec6d416e40cec8dea806c",
+        "cachecannon_commit": "31a2befaa8bf7b3b7a7f7e03e2a847a2e407a3ce",
+        "boot_id": "86bc23db-f6bc-49fa-82b7-f48d801a298b",
+        "instance_id": "i-0690c81234ab4ecb8",
+        "host_fingerprint": "c4c46be36d50f57d",
+        "runner_id": "armbench",
+    }
+
+    def test_published_files_are_the_allowlist_projection_of_the_api_document(self, canary_env, tmp_path):
+        """The API keeps the recorded environment; the public files carry no
+        harness SHA, instance id, boot id, fingerprint, IP, path or UUID, and the
+        change annotation names the type of change. A key the allowlist has not
+        classified fails this test, so a new API field is decided before publish."""
+        from conductress.public_fields import unknown_canary_keys
+
+        from ..unit.test_public_fields import private_shapes_in
+
+        service, _notices = self._service_with_hooks(canary_env, tmp_path)
+        before = dict(self.PRIVATE_ENV, conductress_revision="5466d250765a099f6834ae56acfca7c5950213c4")
+        self._ingest(service, "2026-09-01", 200000.0, env=before)
+        self._ingest(service, "2026-09-02", 200100.0, env=self.PRIVATE_ENV)
+
+        api = service.canary_status()
+        assert unknown_canary_keys(api) == []
+        api_text = json.dumps(api)
+        assert "9ba063de" in api_text and "i-0690c81234ab4ecb8" in api_text  # the API is private and complete
+
+        canary_dir = tmp_path / "published" / "canary"
+        pinned = [r["profile"]["pinned_commit"] for r in api["runners"] if r.get("profile")]
+        service.publish_canary_status()  # every runner's file, as at startup
+        for name in ("armbench.json", "fleet.json", "g4bench.json"):
+            document = json.loads((canary_dir / name).read_text())
+            assert private_shapes_in(document, allowed_values=pinned) == [], name
+            text = json.dumps(document)
+            for private in ("environment_json", "host_fingerprint", "instance_id", "boot_id", "c4c46be36d50f57d"):
+                assert private not in text, (name, private)
+        runner = json.loads((canary_dir / "armbench.json").read_text())["runner"]
+        latest = runner["latest_observation"]
+        assert latest["env_change_annotation"] == "harness revision changed"
+        assert latest["environment"] == {
+            "glibc_version": "2.34",
+            "kernel_release": "6.1.189-236.400.amzn2023.aarch64",
+            "platform": "arm64/c7g.metal/graviton3",  # the service stamps the registry platform
+            "provenance_schema_version": 2,
+        }
+        assert runner["series"]["latest_observation"]["env_change_annotation"] == "harness revision changed"
+        assert latest["score"] == 200100.0 and latest["utc_date"] == "2026-09-02"
+
     def test_static_files_are_world_readable_under_a_private_umask(self, canary_env, tmp_path):
         # The shipped unit runs the service with UMask=0077; the web server
         # still has to read the published files and traverse their directory.
