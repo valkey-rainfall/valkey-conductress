@@ -204,9 +204,78 @@ class TestLocateSteps:
         assert fx.locate_steps("r", scores, [], FAST) == []
 
 
+class TestFloorAndClearing:
+    def test_short_before_window_takes_the_noise_of_the_after_window(self):
+        scores = noisy(30, 100.0, 80, sd=0.01) + noisy(20, 104.0, 81, sd=0.002)
+        cuts = [30]
+        floor, sd = fx.runner_floor(scores, 33, cuts, FAST)  # 3 in-segment days before, 17 after
+        assert sd == pytest.approx(fx.robust_sd(scores[33:50]) / float(np.median(scores[33:50])))
+        assert floor == pytest.approx(max(0.005, 3 * sd))
+
+    def test_cleared_with_fewer_days_before_but_never_confirmed(self):
+        flat = {
+            "enough": False,
+            "enough_to_clear": True,
+            "floor": 0.008,
+            "q": 0.9,
+            "p": 0.9,
+            "effect": 0.0,
+            "ci_lo": -0.004,
+            "ci_hi": 0.003,
+            "kind": "canary",
+            "n_before": 4,
+            "n_after": 28,
+        }
+        assert fx._state(flat, FAST) == fx.STATE_CLEARED
+        step = dict(flat, q=0.001, p=0.001, effect=0.03, ci_lo=0.02, ci_hi=0.04)
+        assert fx._state(step, FAST) == fx.STATE_INSUFFICIENT
+        assert step["reason"] == "4 day(s) before the event, needs 7 to confirm"
+        tiny = dict(flat, enough_to_clear=False, n_before=2)
+        assert fx._state(tiny, FAST) == fx.STATE_INSUFFICIENT and tiny["reason"].startswith("2 day(s) before")
+
+
+class TestProposal:
+    def runner(self, from_generation: bool) -> RunnerInput:
+        scores = noisy(30, 100.0, 90) + noisy(10, 110.0, 91)
+        runner = series("rg", scores, env_at={30: {"kernel_release": "k2"}})
+        cut = runner.observations[29].when + timedelta(hours=2)
+        runner.paired.append(
+            PairedSeries(
+                "throughput a",
+                cut,
+                tuple(noisy(8, 100.0, 92)),
+                tuple(noisy(8, 110.0, 93)),
+                from_generation=from_generation,
+            )
+        )
+        return runner
+
+    def test_confirmed_event_proposes_a_generation_close(self):
+        findings, _ = build_findings([self.runner(False)], now=NOW, cfg=FAST)
+        top = findings["events"][0]
+        assert top["state"] == fx.STATE_CONFIRMED and "close-generation" in top["proposal"]
+        assert top["generation_closed"] is False
+
+    def test_no_proposal_when_the_generation_is_already_closed(self):
+        findings, _ = build_findings([self.runner(True)], now=NOW, cfg=FAST)
+        top = findings["events"][0]
+        assert top["state"] == fx.STATE_CONFIRMED and top["proposal"] is None and top["generation_closed"] is True
+
+
 class TestStates:
     def base(self, **kw):
-        test = {"enough": True, "floor": 0.008, "q": 0.5, "p": 0.5, "effect": 0.0, "ci_lo": -0.002, "ci_hi": 0.003}
+        test = {
+            "enough": True,
+            "floor": 0.008,
+            "q": 0.5,
+            "p": 0.5,
+            "effect": 0.0,
+            "ci_lo": -0.002,
+            "ci_hi": 0.003,
+            "kind": "canary",
+            "n_before": 28,
+            "n_after": 28,
+        }
         test.update(kw)
         return test
 
@@ -368,7 +437,11 @@ def load_fixture(with_explanations: bool) -> tuple[list[RunnerInput], datetime]:
                 ],
                 [ManualEvent(ts(m["at"]), m["label"], tuple(m["fields"]), ts(m["until"])) for m in r["manual_events"]],
                 explanations,
-                [PairedSeries(p["series"], ts(p["cut"]), tuple(p["before"]), tuple(p["after"])) for p in r["paired"]],
+                [
+                    # The fixture's pairs come from a closed series generation.
+                    PairedSeries(p["series"], ts(p["cut"]), tuple(p["before"]), tuple(p["after"]), from_generation=True)
+                    for p in r["paired"]
+                ],
             )
         )
     return runners, ts(doc["now"])
@@ -413,7 +486,8 @@ class TestBacktestRegression:
         assert paired["throughput GET 16B P1"]["state"] == fx.STATE_CONFIRMED
         assert paired["throughput 80:20 GET/SET 16B P10"]["state"] == fx.STATE_CONFIRMED
         assert 16.0 < paired["throughput 80:20 GET/SET 16B P10"]["effect_pct"] < 19.0
-        assert top["proposal"] and "close-generation" in top["proposal"]
+        # The generation is already closed at this event: nothing to propose.
+        assert top["generation_closed"] is True and top["proposal"] is None
         assert backtest["open_count"] == 1
 
     def test_other_runners_stayed_flat_at_that_host_update(self, backtest):
@@ -459,3 +533,37 @@ class TestBacktestRegression:
     def test_ranking_order(self, backtest):
         order = [fx.STATE_ORDER[e["state"]] for e in backtest["events"]]
         assert order == sorted(order)
+
+    def test_flat_events_soon_after_a_step_are_cleared(self, backtest):
+        events = by_id(backtest)
+        # Runner A, 2026-09-25: 4 days after its 2026-09-21 step, 28 days after, -0.06%, CI -0.35..+0.30.
+        flat = events["runner-a:2026-09-25:0"]
+        assert flat["state"] == fx.STATE_CLEARED
+        canary = next(t for t in flat["tests"] if t["kind"] == "canary")
+        assert canary["n_before"] == 4 and canary["n_after"] == 28
+        assert -0.2 < flat["effect_pct"] < 0.1 and flat["ci_pct"][0] > -0.5 and flat["ci_pct"][1] < 0.5
+        # Early-history events with 5 or 6 days before them and a flat interval.
+        for event_id in (
+            "runner-a:2026-09-05:0",
+            "runner-b:2026-09-04:0",
+            "runner-b:2026-09-05:0",
+            "runner-c:2026-09-04:0",
+            "runner-c:2026-09-05:0",
+            "runner-d:2026-09-04:0",
+            "runner-d:2026-09-05:0",
+        ):
+            assert events[event_id]["state"] == fx.STATE_CLEARED, event_id
+
+    def test_every_insufficient_event_says_why(self, backtest):
+        insufficient = [
+            e
+            for e in backtest["events"]
+            if e["state"] == fx.STATE_INSUFFICIENT and not e["event_id"].startswith("fleet:")
+        ]
+        assert insufficient and all(e["reason"] for e in insufficient)
+        assert by_id(backtest)["runner-c:2026-11-09:0"]["reason"] == "1 day(s) after the event, needs 3"
+        assert by_id(backtest)["runner-a:2026-09-23:0"]["reason"] == "2 day(s) before the event, needs 4"
+        assert backtest["state_counts"][fx.STATE_INSUFFICIENT] == 14
+
+    def test_explained_events_carry_no_proposal(self, backtest):
+        assert by_id(backtest)["runner-a:2026-09-21:0"]["proposal"] is None

@@ -376,7 +376,8 @@ revision, manual, other change.
   Wilcoxon signed-rank by sign flips, share of pairs in the same direction.
 - Benjamini-Hochberg over every test of one analysis.
 - Floor per runner: `max(0.5%, 3 x robust sd)` of the canary before window
-  (in-segment, else the 28 prior days).
+  (in-segment; when that window has fewer than 7 days, the in-segment after
+  window, which a step at the event does not inflate; else the 28 prior days).
 - Cross-runner: the effect on every other runner over the same dates, in
   robust sd.
 - Fleet: harness deploys on at least 3 runners within 48 h get one pooled
@@ -389,9 +390,9 @@ revision, manual, other change.
 | State | Rule |
 |---|---|
 | `confirmed` | at least 7 days before and 3 after (5 pairs for paired); q < 0.05; CI excludes 0; `|effect| >=` floor |
-| `cleared` | CI inside +/- floor (`below_floor_shift: true` when q < 0.05 all the same) |
+| `cleared` | CI inside +/- floor, with at least 4 days before, 3 after and 10 in total, so a flat event soon after a located step or at the start of the history is cleared too (`below_floor_shift: true` when q < 0.05 all the same) |
 | `suspected` | otherwise, when p < 0.05 or `|effect| >=` 2 x floor |
-| `insufficient-data` | minimum data not met, or no signal and the CI still too wide to clear |
+| `insufficient-data` | minimum data not met, or no signal and the CI still too wide to clear; `reason` says which ("1 day(s) after the event, needs 3") |
 | `explained` | an operator explanation exists for the event date (`conductress sweep explain-event`) |
 | `suspected-fleet` | pooled fleet row with `|Z| >= 3`, at least 3 runners and 75% in one direction, and fewer than 3 days after the deploy on some runner |
 
@@ -403,7 +404,9 @@ suspected-fleet, explained, cleared, then severity, then newest first.
 `open_count` counts confirmed and suspected only. A pooled fleet row with too
 little data is listed only for the latest deploy. A confirmed event carries a
 `proposal`: the generation close a PERSON may perform; nothing does it
-automatically.
+automatically. There is no proposal when the event is explained, or when a
+closed generation already cuts the series at it (`generation_closed: true`:
+the event owns paired evidence from that generation).
 
 ### Published values
 
