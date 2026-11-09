@@ -1,0 +1,3109 @@
+{
+ "description": "Anonymized canary back-test: 4 runners, 2026-08-30 to 2026-11-09, plus paired sweep evidence of runner-b. Neutral tokens replace kernel and harness revision values.",
+ "explanations": {
+  "runner-a": "2026-09-21",
+  "runner-d": "2026-09-19"
+ },
+ "now": "2026-11-09T12:00:00Z",
+ "runners": [
+  {
+   "display_name": "Runner A",
+   "explanations": [],
+   "manual_events": [
+    {
+     "at": "2026-11-06T16:14:16Z",
+     "fields": [
+      "glibc",
+      "microcode_ctl",
+      "reboot"
+     ],
+     "label": "package update and reboot",
+     "until": "2026-11-06T17:58:26Z"
+    }
+   ],
+   "observations": [
+    {
+     "environment": {
+      "conductress_revision": "rev-1",
+      "kernel_release": "kernel-1",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-08-31T00:09:34Z",
+     "score": 786141.2,
+     "utc_date": "2026-08-30"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-1",
+      "kernel_release": "kernel-1",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-08-31T06:53:14Z",
+     "score": 785881.0,
+     "utc_date": "2026-08-31"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-1",
+      "kernel_release": "kernel-1",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-01T06:40:16Z",
+     "score": 786251.0,
+     "utc_date": "2026-09-01"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-2",
+      "kernel_release": "kernel-1",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-02T06:35:42Z",
+     "score": 783048.7,
+     "utc_date": "2026-09-02"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-2",
+      "kernel_release": "kernel-1",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-03T06:33:19Z",
+     "score": 783179.7,
+     "utc_date": "2026-09-03"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-2",
+      "kernel_release": "kernel-1",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-04T06:30:51Z",
+     "score": 778011.8,
+     "utc_date": "2026-09-04"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-3",
+      "kernel_release": "kernel-1",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-05T06:30:45Z",
+     "score": 784792.2,
+     "utc_date": "2026-09-05"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-4",
+      "kernel_release": "kernel-1",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-06T06:31:53Z",
+     "score": 783999.0,
+     "utc_date": "2026-09-06"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-5",
+      "kernel_release": "kernel-1",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-07T06:39:56Z",
+     "score": 786248.0,
+     "utc_date": "2026-09-07"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-5",
+      "kernel_release": "kernel-1",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-08T06:29:47Z",
+     "score": 785494.1,
+     "utc_date": "2026-09-08"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-5",
+      "kernel_release": "kernel-1",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-09T06:33:39Z",
+     "score": 781858.1,
+     "utc_date": "2026-09-09"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-5",
+      "kernel_release": "kernel-1",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-10T06:32:57Z",
+     "score": 781040.4,
+     "utc_date": "2026-09-10"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-5",
+      "kernel_release": "kernel-1",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-11T06:30:44Z",
+     "score": 789874.5,
+     "utc_date": "2026-09-11"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-5",
+      "kernel_release": "kernel-1",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-12T06:33:44Z",
+     "score": 787054.9,
+     "utc_date": "2026-09-12"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-5",
+      "kernel_release": "kernel-1",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-13T06:32:52Z",
+     "score": 781772.7,
+     "utc_date": "2026-09-13"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-5",
+      "kernel_release": "kernel-1",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-14T06:34:43Z",
+     "score": 790984.3,
+     "utc_date": "2026-09-14"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-5",
+      "kernel_release": "kernel-1",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-15T06:41:45Z",
+     "score": 784651.2,
+     "utc_date": "2026-09-15"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-5",
+      "kernel_release": "kernel-1",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-16T06:34:09Z",
+     "score": 780716.8,
+     "utc_date": "2026-09-16"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-5",
+      "kernel_release": "kernel-1",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-17T06:39:15Z",
+     "score": 783264.1,
+     "utc_date": "2026-09-17"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-5",
+      "kernel_release": "kernel-1",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-18T06:39:03Z",
+     "score": 776679.5,
+     "utc_date": "2026-09-18"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-6",
+      "kernel_release": "kernel-1",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-19T06:42:25Z",
+     "score": 785531.5,
+     "utc_date": "2026-09-19"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-6",
+      "kernel_release": "kernel-1",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-20T06:40:01Z",
+     "score": 781184.6,
+     "utc_date": "2026-09-20"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-7",
+      "kernel_release": "kernel-1",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-21T07:26:10Z",
+     "score": 776934.4,
+     "utc_date": "2026-09-21"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-8",
+      "kernel_release": "kernel-1",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-22T06:32:19Z",
+     "score": 771907.3,
+     "utc_date": "2026-09-22"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-9",
+      "kernel_release": "kernel-1",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-23T06:37:09Z",
+     "score": 774510.3,
+     "utc_date": "2026-09-23"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-9",
+      "kernel_release": "kernel-1",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-24T06:33:57Z",
+     "score": 774756.9,
+     "utc_date": "2026-09-24"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-10",
+      "kernel_release": "kernel-1",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-25T06:41:19Z",
+     "score": 774756.3,
+     "utc_date": "2026-09-25"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-10",
+      "kernel_release": "kernel-1",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-26T06:32:42Z",
+     "score": 774766.0,
+     "utc_date": "2026-09-26"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-10",
+      "kernel_release": "kernel-1",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-27T06:47:23Z",
+     "score": 777539.8,
+     "utc_date": "2026-09-27"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-10",
+      "kernel_release": "kernel-1",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-28T06:42:51Z",
+     "score": 773317.8,
+     "utc_date": "2026-09-28"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-10",
+      "kernel_release": "kernel-1",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-29T06:35:20Z",
+     "score": 780860.3,
+     "utc_date": "2026-09-29"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-10",
+      "kernel_release": "kernel-1",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-30T06:38:53Z",
+     "score": 777597.2,
+     "utc_date": "2026-09-30"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-11",
+      "kernel_release": "kernel-1",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-01T06:32:25Z",
+     "score": 769561.4,
+     "utc_date": "2026-10-01"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-11",
+      "kernel_release": "kernel-1",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-02T06:33:56Z",
+     "score": 773290.2,
+     "utc_date": "2026-10-02"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-11",
+      "kernel_release": "kernel-1",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-03T06:36:25Z",
+     "score": 774065.7,
+     "utc_date": "2026-10-03"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-11",
+      "kernel_release": "kernel-1",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-04T06:31:14Z",
+     "score": 774982.6,
+     "utc_date": "2026-10-04"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-11",
+      "kernel_release": "kernel-1",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-05T06:34:56Z",
+     "score": 774133.8,
+     "utc_date": "2026-10-05"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-11",
+      "kernel_release": "kernel-1",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-06T06:39:25Z",
+     "score": 773372.7,
+     "utc_date": "2026-10-06"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-11",
+      "kernel_release": "kernel-1",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-07T06:39:33Z",
+     "score": 772643.9,
+     "utc_date": "2026-10-07"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-11",
+      "kernel_release": "kernel-1",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-08T06:33:23Z",
+     "score": 770775.0,
+     "utc_date": "2026-10-08"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-11",
+      "kernel_release": "kernel-1",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-09T06:33:51Z",
+     "score": 774341.6,
+     "utc_date": "2026-10-09"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-11",
+      "kernel_release": "kernel-1",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-10T06:35:13Z",
+     "score": 772762.7,
+     "utc_date": "2026-10-10"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-11",
+      "kernel_release": "kernel-1",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-11T06:31:19Z",
+     "score": 776588.9,
+     "utc_date": "2026-10-11"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-11",
+      "kernel_release": "kernel-1",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-12T06:35:29Z",
+     "score": 774536.0,
+     "utc_date": "2026-10-12"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-11",
+      "kernel_release": "kernel-1",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-13T06:38:39Z",
+     "score": 774288.3,
+     "utc_date": "2026-10-13"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-11",
+      "kernel_release": "kernel-1",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-14T06:41:07Z",
+     "score": 770591.1,
+     "utc_date": "2026-10-14"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-11",
+      "kernel_release": "kernel-1",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-15T06:41:26Z",
+     "score": 776233.4,
+     "utc_date": "2026-10-15"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-11",
+      "kernel_release": "kernel-1",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-16T06:41:17Z",
+     "score": 768573.0,
+     "utc_date": "2026-10-16"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-11",
+      "kernel_release": "kernel-1",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-17T06:36:00Z",
+     "score": 770726.2,
+     "utc_date": "2026-10-17"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-11",
+      "kernel_release": "kernel-1",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-18T06:37:49Z",
+     "score": 775584.0,
+     "utc_date": "2026-10-18"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-11",
+      "kernel_release": "kernel-1",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-19T06:47:13Z",
+     "score": 773013.4,
+     "utc_date": "2026-10-19"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-11",
+      "kernel_release": "kernel-1",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-20T06:30:04Z",
+     "score": 774571.5,
+     "utc_date": "2026-10-20"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-12",
+      "kernel_release": "kernel-1",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-21T06:31:35Z",
+     "score": 775085.5,
+     "utc_date": "2026-10-21"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-12",
+      "kernel_release": "kernel-1",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-22T06:37:46Z",
+     "score": 773927.9,
+     "utc_date": "2026-10-22"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-12",
+      "kernel_release": "kernel-1",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-23T06:35:39Z",
+     "score": 774529.0,
+     "utc_date": "2026-10-23"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-12",
+      "kernel_release": "kernel-1",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-24T06:40:55Z",
+     "score": 770438.1,
+     "utc_date": "2026-10-24"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-12",
+      "kernel_release": "kernel-1",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-25T06:34:51Z",
+     "score": 772036.9,
+     "utc_date": "2026-10-25"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-12",
+      "kernel_release": "kernel-1",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-26T06:42:16Z",
+     "score": 775286.8,
+     "utc_date": "2026-10-26"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-12",
+      "kernel_release": "kernel-1",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-27T06:30:36Z",
+     "score": 777504.8,
+     "utc_date": "2026-10-27"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-12",
+      "kernel_release": "kernel-1",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-28T06:43:13Z",
+     "score": 775441.0,
+     "utc_date": "2026-10-28"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-12",
+      "kernel_release": "kernel-1",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-29T06:34:11Z",
+     "score": 775712.8,
+     "utc_date": "2026-10-29"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-12",
+      "kernel_release": "kernel-1",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-30T06:39:07Z",
+     "score": 774790.2,
+     "utc_date": "2026-10-30"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-12",
+      "kernel_release": "kernel-1",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-11-03T20:02:22Z",
+     "score": 777668.1,
+     "utc_date": "2026-11-03"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-13",
+      "kernel_release": "kernel-1",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-11-04T06:47:08Z",
+     "score": 773200.1,
+     "utc_date": "2026-11-04"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-13",
+      "kernel_release": "kernel-1",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-11-05T06:37:03Z",
+     "score": 773636.3,
+     "utc_date": "2026-11-05"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-14",
+      "kernel_release": "kernel-1",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-11-06T06:34:58Z",
+     "score": 778154.8,
+     "utc_date": "2026-11-06"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-14",
+      "kernel_release": "kernel-2",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-11-07T06:29:38Z",
+     "score": 777222.4,
+     "utc_date": "2026-11-07"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-14",
+      "kernel_release": "kernel-2",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-11-08T06:37:01Z",
+     "score": 768907.5,
+     "utc_date": "2026-11-08"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-15",
+      "kernel_release": "kernel-2",
+      "provenance_schema_version": 2
+     },
+     "measured_at": "2026-11-09T06:41:10Z",
+     "score": 775545.0,
+     "utc_date": "2026-11-09"
+    }
+   ],
+   "paired": [],
+   "runner_id": "runner-a"
+  },
+  {
+   "display_name": "Runner B",
+   "explanations": [],
+   "manual_events": [
+    {
+     "at": "2026-11-06T16:14:23Z",
+     "fields": [
+      "glibc",
+      "microcode_ctl",
+      "reboot"
+     ],
+     "label": "package update and reboot",
+     "until": "2026-11-06T18:21:22Z"
+    }
+   ],
+   "observations": [
+    {
+     "environment": {
+      "conductress_revision": "rev-1",
+      "kernel_release": "kernel-3",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-08-31T00:08:11Z",
+     "score": 613692.0,
+     "utc_date": "2026-08-30"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-1",
+      "kernel_release": "kernel-3",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-08-31T06:32:32Z",
+     "score": 611635.9,
+     "utc_date": "2026-08-31"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-1",
+      "kernel_release": "kernel-3",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-01T06:42:56Z",
+     "score": 613253.7,
+     "utc_date": "2026-09-01"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-2",
+      "kernel_release": "kernel-3",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-02T06:39:22Z",
+     "score": 611269.8,
+     "utc_date": "2026-09-02"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-2",
+      "kernel_release": "kernel-3",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-03T06:29:50Z",
+     "score": 616811.4,
+     "utc_date": "2026-09-03"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-16",
+      "kernel_release": "kernel-3",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-04T08:29:54Z",
+     "score": 610703.3,
+     "utc_date": "2026-09-04"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-3",
+      "kernel_release": "kernel-3",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-05T06:33:28Z",
+     "score": 613853.8,
+     "utc_date": "2026-09-05"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-4",
+      "kernel_release": "kernel-3",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-06T06:38:37Z",
+     "score": 611622.9,
+     "utc_date": "2026-09-06"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-5",
+      "kernel_release": "kernel-3",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-07T06:34:09Z",
+     "score": 610933.5,
+     "utc_date": "2026-09-07"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-5",
+      "kernel_release": "kernel-3",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-08T06:35:31Z",
+     "score": 612938.7,
+     "utc_date": "2026-09-08"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-5",
+      "kernel_release": "kernel-3",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-09T06:35:02Z",
+     "score": 612755.9,
+     "utc_date": "2026-09-09"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-5",
+      "kernel_release": "kernel-3",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-10T06:34:02Z",
+     "score": 612988.2,
+     "utc_date": "2026-09-10"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-5",
+      "kernel_release": "kernel-3",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-11T06:34:07Z",
+     "score": 610625.1,
+     "utc_date": "2026-09-11"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-5",
+      "kernel_release": "kernel-3",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-12T06:38:24Z",
+     "score": 613297.6,
+     "utc_date": "2026-09-12"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-5",
+      "kernel_release": "kernel-3",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-13T06:34:39Z",
+     "score": 612482.1,
+     "utc_date": "2026-09-13"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-5",
+      "kernel_release": "kernel-3",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-14T06:42:24Z",
+     "score": 613167.5,
+     "utc_date": "2026-09-14"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-5",
+      "kernel_release": "kernel-3",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-15T06:42:28Z",
+     "score": 614271.1,
+     "utc_date": "2026-09-15"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-5",
+      "kernel_release": "kernel-3",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-16T06:30:54Z",
+     "score": 611471.2,
+     "utc_date": "2026-09-16"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-5",
+      "kernel_release": "kernel-3",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-17T06:37:10Z",
+     "score": 615894.2,
+     "utc_date": "2026-09-17"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-5",
+      "kernel_release": "kernel-3",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-18T06:32:20Z",
+     "score": 613162.8,
+     "utc_date": "2026-09-18"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-6",
+      "kernel_release": "kernel-3",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-19T06:40:35Z",
+     "score": 611040.9,
+     "utc_date": "2026-09-19"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-6",
+      "kernel_release": "kernel-3",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-20T06:33:44Z",
+     "score": 611085.4,
+     "utc_date": "2026-09-20"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-7",
+      "kernel_release": "kernel-3",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-21T06:30:20Z",
+     "score": 613993.9,
+     "utc_date": "2026-09-21"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-8",
+      "kernel_release": "kernel-3",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-22T06:34:16Z",
+     "score": 613381.8,
+     "utc_date": "2026-09-22"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-9",
+      "kernel_release": "kernel-3",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-23T06:33:02Z",
+     "score": 614072.2,
+     "utc_date": "2026-09-23"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-9",
+      "kernel_release": "kernel-3",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-24T06:33:09Z",
+     "score": 615333.6,
+     "utc_date": "2026-09-24"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-10",
+      "kernel_release": "kernel-3",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-25T06:36:30Z",
+     "score": 615186.4,
+     "utc_date": "2026-09-25"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-10",
+      "kernel_release": "kernel-3",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-26T06:36:26Z",
+     "score": 614482.1,
+     "utc_date": "2026-09-26"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-10",
+      "kernel_release": "kernel-3",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-27T06:36:50Z",
+     "score": 609287.0,
+     "utc_date": "2026-09-27"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-10",
+      "kernel_release": "kernel-3",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-28T06:30:31Z",
+     "score": 615984.4,
+     "utc_date": "2026-09-28"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-10",
+      "kernel_release": "kernel-3",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-29T06:33:15Z",
+     "score": 612143.6,
+     "utc_date": "2026-09-29"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-10",
+      "kernel_release": "kernel-3",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-30T06:29:30Z",
+     "score": 613946.7,
+     "utc_date": "2026-09-30"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-11",
+      "kernel_release": "kernel-3",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-01T06:31:52Z",
+     "score": 611502.7,
+     "utc_date": "2026-10-01"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-11",
+      "kernel_release": "kernel-3",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-02T06:41:35Z",
+     "score": 614739.8,
+     "utc_date": "2026-10-02"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-11",
+      "kernel_release": "kernel-3",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-03T06:32:29Z",
+     "score": 614035.6,
+     "utc_date": "2026-10-03"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-11",
+      "kernel_release": "kernel-3",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-04T06:29:05Z",
+     "score": 615833.3,
+     "utc_date": "2026-10-04"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-11",
+      "kernel_release": "kernel-3",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-05T06:38:14Z",
+     "score": 613032.5,
+     "utc_date": "2026-10-05"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-11",
+      "kernel_release": "kernel-3",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-06T06:30:39Z",
+     "score": 613897.6,
+     "utc_date": "2026-10-06"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-11",
+      "kernel_release": "kernel-3",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-07T06:38:27Z",
+     "score": 615706.2,
+     "utc_date": "2026-10-07"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-11",
+      "kernel_release": "kernel-3",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-08T06:33:58Z",
+     "score": 614997.4,
+     "utc_date": "2026-10-08"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-11",
+      "kernel_release": "kernel-3",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-09T06:35:12Z",
+     "score": 613875.1,
+     "utc_date": "2026-10-09"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-11",
+      "kernel_release": "kernel-3",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-10T06:36:09Z",
+     "score": 613724.3,
+     "utc_date": "2026-10-10"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-11",
+      "kernel_release": "kernel-3",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-11T06:35:29Z",
+     "score": 614131.7,
+     "utc_date": "2026-10-11"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-11",
+      "kernel_release": "kernel-3",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-12T06:33:45Z",
+     "score": 613094.5,
+     "utc_date": "2026-10-12"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-11",
+      "kernel_release": "kernel-3",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-13T06:34:53Z",
+     "score": 612786.1,
+     "utc_date": "2026-10-13"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-11",
+      "kernel_release": "kernel-3",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-14T06:35:26Z",
+     "score": 615856.7,
+     "utc_date": "2026-10-14"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-11",
+      "kernel_release": "kernel-3",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-15T06:39:17Z",
+     "score": 613520.6,
+     "utc_date": "2026-10-15"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-11",
+      "kernel_release": "kernel-3",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-16T06:38:11Z",
+     "score": 612814.6,
+     "utc_date": "2026-10-16"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-11",
+      "kernel_release": "kernel-3",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-17T06:33:32Z",
+     "score": 609988.0,
+     "utc_date": "2026-10-17"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-11",
+      "kernel_release": "kernel-3",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-18T06:35:43Z",
+     "score": 615398.8,
+     "utc_date": "2026-10-18"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-11",
+      "kernel_release": "kernel-3",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-19T06:39:59Z",
+     "score": 614569.5,
+     "utc_date": "2026-10-19"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-11",
+      "kernel_release": "kernel-3",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-20T06:44:18Z",
+     "score": 616708.2,
+     "utc_date": "2026-10-20"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-12",
+      "kernel_release": "kernel-3",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-21T06:37:41Z",
+     "score": 613148.5,
+     "utc_date": "2026-10-21"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-12",
+      "kernel_release": "kernel-3",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-22T06:30:20Z",
+     "score": 612009.4,
+     "utc_date": "2026-10-22"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-12",
+      "kernel_release": "kernel-3",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-23T06:33:32Z",
+     "score": 612750.9,
+     "utc_date": "2026-10-23"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-12",
+      "kernel_release": "kernel-3",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-24T06:37:01Z",
+     "score": 614935.6,
+     "utc_date": "2026-10-24"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-12",
+      "kernel_release": "kernel-3",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-25T06:30:18Z",
+     "score": 614476.9,
+     "utc_date": "2026-10-25"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-12",
+      "kernel_release": "kernel-3",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-26T06:31:48Z",
+     "score": 613634.2,
+     "utc_date": "2026-10-26"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-12",
+      "kernel_release": "kernel-3",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-27T06:32:15Z",
+     "score": 613837.0,
+     "utc_date": "2026-10-27"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-12",
+      "kernel_release": "kernel-3",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-28T06:35:46Z",
+     "score": 614495.2,
+     "utc_date": "2026-10-28"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-12",
+      "kernel_release": "kernel-3",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-29T06:33:19Z",
+     "score": 615226.1,
+     "utc_date": "2026-10-29"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-12",
+      "kernel_release": "kernel-3",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-30T06:37:22Z",
+     "score": 616394.6,
+     "utc_date": "2026-10-30"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-12",
+      "kernel_release": "kernel-3",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-11-03T20:06:59Z",
+     "score": 611542.4,
+     "utc_date": "2026-11-03"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-17",
+      "kernel_release": "kernel-3",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-11-04T06:31:10Z",
+     "score": 612964.0,
+     "utc_date": "2026-11-04"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-17",
+      "kernel_release": "kernel-3",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-11-05T06:44:28Z",
+     "score": 612005.3,
+     "utc_date": "2026-11-05"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-14",
+      "kernel_release": "kernel-3",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-11-06T06:31:23Z",
+     "score": 615316.0,
+     "utc_date": "2026-11-06"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-14",
+      "kernel_release": "kernel-2",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-11-07T06:35:36Z",
+     "score": 689309.0,
+     "utc_date": "2026-11-07"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-14",
+      "kernel_release": "kernel-2",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-11-08T06:29:18Z",
+     "score": 690595.9,
+     "utc_date": "2026-11-08"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-15",
+      "kernel_release": "kernel-2",
+      "provenance_schema_version": 2
+     },
+     "measured_at": "2026-11-09T06:41:51Z",
+     "score": 686477.3,
+     "utc_date": "2026-11-09"
+    }
+   ],
+   "paired": [
+    {
+     "after": [
+      856908.5,
+      854263.0,
+      813440.0,
+      304505.0,
+      297680.0,
+      849027.0,
+      853077.0,
+      295832.5,
+      855152.0,
+      661385.0,
+      819639.0,
+      305313.0,
+      673673.5,
+      727391.0,
+      652796.5,
+      814896.5,
+      817707.5,
+      658770.0,
+      304898.0,
+      814486.0,
+      835830.0,
+      815645.0,
+      731912.5,
+      734742.5,
+      668765.0,
+      731969.0,
+      851119.5,
+      835355.0,
+      656572.0,
+      669046.5,
+      295539.0
+     ],
+     "before": [
+      759949.0,
+      762875.0,
+      724606.0,
+      265596.0,
+      256432.0,
+      765939.0,
+      768639.5,
+      259689.0,
+      772952.0,
+      620521.5,
+      728666.5,
+      264299.0,
+      591532.5,
+      661058.0,
+      584469.5,
+      736353.0,
+      728030.0,
+      614614.5,
+      265106.0,
+      736070.0,
+      740550.5,
+      733129.5,
+      657337.5,
+      654995.0,
+      591074.5,
+      652767.0,
+      763142.5,
+      741929.0,
+      589913.0,
+      579399.5,
+      258106.0
+     ],
+     "cut": "2026-11-06T16:14:23Z",
+     "series": "throughput GET 16B P1"
+    },
+    {
+     "after": [
+      935100.4,
+      1289806.6,
+      1223602.4,
+      882981.0,
+      1011289.4,
+      737818.0,
+      855175.7142857143,
+      946860.9,
+      730442.7,
+      852575.4,
+      700502.1,
+      913219.4,
+      1011515.0,
+      1006645.7,
+      709393.0,
+      947331.5,
+      694769.2,
+      747805.2,
+      748696.4,
+      885665.2,
+      1006175.6666666666,
+      734266.4,
+      1280774.5,
+      1342045.9,
+      1265715.3,
+      912208.7142857143,
+      1280759.2,
+      705287.1,
+      735999.7,
+      910622.0,
+      738411.7,
+      994596.4,
+      1003817.6,
+      1010726.5,
+      1330977.2,
+      1257647.7,
+      1288969.5,
+      955007.3,
+      887463.2,
+      998830.8,
+      926888.8571428572,
+      708834.7,
+      1349469.1,
+      906043.5,
+      1219315.5,
+      936350.0,
+      1023420.6,
+      947780.9,
+      737436.2,
+      910293.4444444445,
+      912267.8571428572,
+      1330381.8,
+      933972.1,
+      910845.6,
+      1023616.6,
+      1236473.8,
+      953346.7,
+      1001906.1,
+      886807.8571428572,
+      1267101.8,
+      1303374.2,
+      710800.4,
+      747259.8,
+      867852.2,
+      1011316.9,
+      955605.1
+     ],
+     "before": [
+      797810.0,
+      1058375.6,
+      1031219.4,
+      756213.8,
+      850169.2,
+      640992.6,
+      734196.2,
+      811632.8333333334,
+      629708.4,
+      735156.2,
+      621316.1,
+      771604.0,
+      858401.6666666666,
+      849916.4,
+      622171.1,
+      809090.4,
+      609966.9,
+      652125.6,
+      655344.5,
+      759408.4,
+      858534.0,
+      647406.8888888889,
+      1049290.5,
+      1105372.9,
+      1054818.4,
+      776924.2857142857,
+      1048268.1,
+      619084.1,
+      646587.0,
+      764739.4,
+      645101.7,
+      842102.7,
+      858738.4,
+      875489.2,
+      1090874.5,
+      1061717.2,
+      1071047.5,
+      809825.2,
+      759734.2,
+      851288.0,
+      793766.1,
+      622874.4444444445,
+      1118437.0,
+      771162.0,
+      1010996.4,
+      796663.9,
+      859820.8,
+      806716.1,
+      644877.4444444445,
+      770126.5714285715,
+      770980.5,
+      1111577.9,
+      798140.2,
+      769917.1666666666,
+      879990.8,
+      1037094.2,
+      807108.7,
+      842107.1,
+      746622.6,
+      1036762.2,
+      1058957.7,
+      625564.3,
+      653634.2,
+      746403.6666666666,
+      853945.6,
+      808217.5
+     ],
+     "cut": "2026-11-06T16:14:23Z",
+     "series": "throughput 80:20 GET/SET 16B P10"
+    },
+    {
+     "after": [
+      1726892.2857142857
+     ],
+     "before": [
+      1461352.6
+     ],
+     "cut": "2026-11-06T16:14:23Z",
+     "series": "throughput engine-b get-k16-v1024-t7-p10"
+    },
+    {
+     "after": [
+      851552.5
+     ],
+     "before": [
+      766250.0
+     ],
+     "cut": "2026-11-06T16:14:23Z",
+     "series": "throughput engine-b get-k16-v16-t7-p1"
+    },
+    {
+     "after": [
+      1930807.7142857143
+     ],
+     "before": [
+      1604474.9
+     ],
+     "cut": "2026-11-06T16:14:23Z",
+     "series": "throughput engine-b get-k16-v16-t7-p10"
+    },
+    {
+     "after": [
+      1670257.1
+     ],
+     "before": [
+      1375077.75
+     ],
+     "cut": "2026-11-06T16:14:23Z",
+     "series": "throughput engine-b mixed-s20-k16-v16-t7-p10"
+    },
+    {
+     "after": [
+      1243623.8
+     ],
+     "before": [
+      982166.2
+     ],
+     "cut": "2026-11-06T16:14:23Z",
+     "series": "throughput engine-b set-k16-v16-t7-p10"
+    }
+   ],
+   "runner_id": "runner-b"
+  },
+  {
+   "display_name": "Runner C",
+   "explanations": [],
+   "manual_events": [
+    {
+     "at": "2026-11-06T16:03:37Z",
+     "fields": [
+      "glibc",
+      "reboot"
+     ],
+     "label": "package update and reboot",
+     "until": "2026-11-06T17:31:50Z"
+    }
+   ],
+   "observations": [
+    {
+     "environment": {
+      "conductress_revision": "rev-1",
+      "kernel_release": "kernel-4",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-08-31T00:22:11Z",
+     "score": 936997.3,
+     "utc_date": "2026-08-30"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-18",
+      "kernel_release": "kernel-4",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-08-31T06:32:29Z",
+     "score": 939654.1,
+     "utc_date": "2026-08-31"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-18",
+      "kernel_release": "kernel-4",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-01T06:41:08Z",
+     "score": 937783.8,
+     "utc_date": "2026-09-01"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-2",
+      "kernel_release": "kernel-4",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-02T06:31:37Z",
+     "score": 938586.3,
+     "utc_date": "2026-09-02"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-2",
+      "kernel_release": "kernel-4",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-03T06:30:25Z",
+     "score": 943846.9,
+     "utc_date": "2026-09-03"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-16",
+      "kernel_release": "kernel-4",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-04T08:30:47Z",
+     "score": 941363.7,
+     "utc_date": "2026-09-04"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-3",
+      "kernel_release": "kernel-4",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-05T06:35:36Z",
+     "score": 939219.1,
+     "utc_date": "2026-09-05"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-4",
+      "kernel_release": "kernel-4",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-06T06:39:40Z",
+     "score": 942090.2,
+     "utc_date": "2026-09-06"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-5",
+      "kernel_release": "kernel-4",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-07T06:40:49Z",
+     "score": 939145.2,
+     "utc_date": "2026-09-07"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-5",
+      "kernel_release": "kernel-4",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-08T06:33:05Z",
+     "score": 941342.5,
+     "utc_date": "2026-09-08"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-5",
+      "kernel_release": "kernel-4",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-09T06:37:40Z",
+     "score": 944184.4,
+     "utc_date": "2026-09-09"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-5",
+      "kernel_release": "kernel-4",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-10T06:33:59Z",
+     "score": 939109.6,
+     "utc_date": "2026-09-10"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-5",
+      "kernel_release": "kernel-4",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-11T06:30:40Z",
+     "score": 940812.4,
+     "utc_date": "2026-09-11"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-5",
+      "kernel_release": "kernel-4",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-12T06:29:14Z",
+     "score": 936307.9,
+     "utc_date": "2026-09-12"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-5",
+      "kernel_release": "kernel-4",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-13T06:36:31Z",
+     "score": 936352.6,
+     "utc_date": "2026-09-13"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-5",
+      "kernel_release": "kernel-4",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-14T06:40:29Z",
+     "score": 937319.7,
+     "utc_date": "2026-09-14"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-5",
+      "kernel_release": "kernel-4",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-15T06:33:44Z",
+     "score": 939181.8,
+     "utc_date": "2026-09-15"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-5",
+      "kernel_release": "kernel-4",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-16T06:41:16Z",
+     "score": 940274.7,
+     "utc_date": "2026-09-16"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-5",
+      "kernel_release": "kernel-4",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-17T06:41:57Z",
+     "score": 938748.6,
+     "utc_date": "2026-09-17"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-5",
+      "kernel_release": "kernel-4",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-18T06:30:52Z",
+     "score": 938353.0,
+     "utc_date": "2026-09-18"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-6",
+      "kernel_release": "kernel-4",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-19T06:41:30Z",
+     "score": 935770.8,
+     "utc_date": "2026-09-19"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-19",
+      "kernel_release": "kernel-4",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-20T06:34:11Z",
+     "score": 941794.8,
+     "utc_date": "2026-09-20"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-7",
+      "kernel_release": "kernel-4",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-21T06:45:00Z",
+     "score": 940825.7,
+     "utc_date": "2026-09-21"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-8",
+      "kernel_release": "kernel-4",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-22T06:37:12Z",
+     "score": 939247.0,
+     "utc_date": "2026-09-22"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-9",
+      "kernel_release": "kernel-4",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-23T06:29:19Z",
+     "score": 937206.7,
+     "utc_date": "2026-09-23"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-9",
+      "kernel_release": "kernel-4",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-24T06:35:25Z",
+     "score": 936998.1,
+     "utc_date": "2026-09-24"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-20",
+      "kernel_release": "kernel-4",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-25T06:43:52Z",
+     "score": 941496.9,
+     "utc_date": "2026-09-25"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-21",
+      "kernel_release": "kernel-4",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-26T20:54:43Z",
+     "score": 941795.0,
+     "utc_date": "2026-09-26"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-21",
+      "kernel_release": "kernel-4",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-27T06:31:00Z",
+     "score": 939969.9,
+     "utc_date": "2026-09-27"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-21",
+      "kernel_release": "kernel-4",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-28T06:36:58Z",
+     "score": 938899.2,
+     "utc_date": "2026-09-28"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-21",
+      "kernel_release": "kernel-4",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-29T06:41:42Z",
+     "score": 936550.1,
+     "utc_date": "2026-09-29"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-21",
+      "kernel_release": "kernel-4",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-30T06:40:01Z",
+     "score": 936550.1,
+     "utc_date": "2026-09-30"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-11",
+      "kernel_release": "kernel-4",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-01T06:31:49Z",
+     "score": 939164.0,
+     "utc_date": "2026-10-01"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-11",
+      "kernel_release": "kernel-4",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-02T06:37:10Z",
+     "score": 939041.5,
+     "utc_date": "2026-10-02"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-11",
+      "kernel_release": "kernel-4",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-03T06:35:54Z",
+     "score": 940708.0,
+     "utc_date": "2026-10-03"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-11",
+      "kernel_release": "kernel-4",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-04T06:39:08Z",
+     "score": 940579.4,
+     "utc_date": "2026-10-04"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-11",
+      "kernel_release": "kernel-4",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-05T06:35:23Z",
+     "score": 941115.2,
+     "utc_date": "2026-10-05"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-11",
+      "kernel_release": "kernel-4",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-06T06:29:56Z",
+     "score": 938197.7,
+     "utc_date": "2026-10-06"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-11",
+      "kernel_release": "kernel-4",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-07T06:42:22Z",
+     "score": 936706.6,
+     "utc_date": "2026-10-07"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-11",
+      "kernel_release": "kernel-4",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-08T06:29:59Z",
+     "score": 941969.3,
+     "utc_date": "2026-10-08"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-11",
+      "kernel_release": "kernel-4",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-09T06:29:58Z",
+     "score": 938485.4,
+     "utc_date": "2026-10-09"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-11",
+      "kernel_release": "kernel-4",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-10T06:33:53Z",
+     "score": 939631.3,
+     "utc_date": "2026-10-10"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-11",
+      "kernel_release": "kernel-4",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-11T06:31:51Z",
+     "score": 941844.1,
+     "utc_date": "2026-10-11"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-11",
+      "kernel_release": "kernel-4",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-12T06:40:20Z",
+     "score": 940677.0,
+     "utc_date": "2026-10-12"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-11",
+      "kernel_release": "kernel-4",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-13T06:43:17Z",
+     "score": 937307.6,
+     "utc_date": "2026-10-13"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-11",
+      "kernel_release": "kernel-4",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-14T06:40:04Z",
+     "score": 942417.2,
+     "utc_date": "2026-10-14"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-11",
+      "kernel_release": "kernel-4",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-15T06:40:28Z",
+     "score": 941505.1,
+     "utc_date": "2026-10-15"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-11",
+      "kernel_release": "kernel-4",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-16T06:39:41Z",
+     "score": 938297.2,
+     "utc_date": "2026-10-16"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-11",
+      "kernel_release": "kernel-4",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-17T06:35:52Z",
+     "score": 936592.8,
+     "utc_date": "2026-10-17"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-11",
+      "kernel_release": "kernel-4",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-18T06:32:38Z",
+     "score": 937627.3,
+     "utc_date": "2026-10-18"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-11",
+      "kernel_release": "kernel-4",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-19T06:30:22Z",
+     "score": 939291.5,
+     "utc_date": "2026-10-19"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-11",
+      "kernel_release": "kernel-4",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-20T06:38:07Z",
+     "score": 941426.7,
+     "utc_date": "2026-10-20"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-12",
+      "kernel_release": "kernel-4",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-21T06:38:21Z",
+     "score": 936459.5,
+     "utc_date": "2026-10-21"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-12",
+      "kernel_release": "kernel-4",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-22T06:31:13Z",
+     "score": 935941.9,
+     "utc_date": "2026-10-22"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-12",
+      "kernel_release": "kernel-4",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-23T06:35:23Z",
+     "score": 941868.0,
+     "utc_date": "2026-10-23"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-12",
+      "kernel_release": "kernel-4",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-24T06:38:01Z",
+     "score": 937343.8,
+     "utc_date": "2026-10-24"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-12",
+      "kernel_release": "kernel-4",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-25T06:44:45Z",
+     "score": 937140.5,
+     "utc_date": "2026-10-25"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-12",
+      "kernel_release": "kernel-4",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-26T06:38:44Z",
+     "score": 940352.2,
+     "utc_date": "2026-10-26"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-12",
+      "kernel_release": "kernel-4",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-27T06:38:02Z",
+     "score": 941729.9,
+     "utc_date": "2026-10-27"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-12",
+      "kernel_release": "kernel-4",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-28T06:42:39Z",
+     "score": 941725.0,
+     "utc_date": "2026-10-28"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-12",
+      "kernel_release": "kernel-4",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-29T06:45:43Z",
+     "score": 940936.1,
+     "utc_date": "2026-10-29"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-12",
+      "kernel_release": "kernel-4",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-30T06:41:21Z",
+     "score": 936850.8,
+     "utc_date": "2026-10-30"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-12",
+      "kernel_release": "kernel-4",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-11-03T20:05:16Z",
+     "score": 942779.4,
+     "utc_date": "2026-11-03"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-13",
+      "kernel_release": "kernel-4",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-11-04T06:41:04Z",
+     "score": 940306.2,
+     "utc_date": "2026-11-04"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-13",
+      "kernel_release": "kernel-4",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-11-05T06:31:26Z",
+     "score": 939459.6,
+     "utc_date": "2026-11-05"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-14",
+      "kernel_release": "kernel-4",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-11-06T06:36:39Z",
+     "score": 944124.4,
+     "utc_date": "2026-11-06"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-14",
+      "kernel_release": "kernel-5",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-11-07T06:29:23Z",
+     "score": 938832.7,
+     "utc_date": "2026-11-07"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-14",
+      "kernel_release": "kernel-5",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-11-08T06:41:41Z",
+     "score": 941591.7,
+     "utc_date": "2026-11-08"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-15",
+      "kernel_release": "kernel-5",
+      "provenance_schema_version": 2
+     },
+     "measured_at": "2026-11-09T06:37:35Z",
+     "score": 942338.8,
+     "utc_date": "2026-11-09"
+    }
+   ],
+   "paired": [],
+   "runner_id": "runner-c"
+  },
+  {
+   "display_name": "Runner D",
+   "explanations": [],
+   "manual_events": [
+    {
+     "at": "2026-11-06T16:18:57Z",
+     "fields": [
+      "glibc",
+      "reboot"
+     ],
+     "label": "package update and reboot",
+     "until": "2026-11-06T18:39:45Z"
+    }
+   ],
+   "observations": [
+    {
+     "environment": {
+      "conductress_revision": "rev-1",
+      "kernel_release": "kernel-6",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-08-31T00:08:55Z",
+     "score": 1129269.8,
+     "utc_date": "2026-08-30"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-1",
+      "kernel_release": "kernel-6",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-08-31T06:38:28Z",
+     "score": 1127536.3,
+     "utc_date": "2026-08-31"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-1",
+      "kernel_release": "kernel-6",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-01T06:39:56Z",
+     "score": 1123264.5,
+     "utc_date": "2026-09-01"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-2",
+      "kernel_release": "kernel-6",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-02T06:31:32Z",
+     "score": 1123393.8,
+     "utc_date": "2026-09-02"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-2",
+      "kernel_release": "kernel-6",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-03T06:31:57Z",
+     "score": 1127975.2,
+     "utc_date": "2026-09-03"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-16",
+      "kernel_release": "kernel-6",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-04T08:30:27Z",
+     "score": 1126074.3,
+     "utc_date": "2026-09-04"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-3",
+      "kernel_release": "kernel-6",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-05T06:35:29Z",
+     "score": 1131451.8,
+     "utc_date": "2026-09-05"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-4",
+      "kernel_release": "kernel-6",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-06T06:30:21Z",
+     "score": 1125545.8,
+     "utc_date": "2026-09-06"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-5",
+      "kernel_release": "kernel-6",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-07T06:33:28Z",
+     "score": 1131197.3,
+     "utc_date": "2026-09-07"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-5",
+      "kernel_release": "kernel-6",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-08T06:40:36Z",
+     "score": 1128534.9,
+     "utc_date": "2026-09-08"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-5",
+      "kernel_release": "kernel-6",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-09T06:37:03Z",
+     "score": 1130718.7,
+     "utc_date": "2026-09-09"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-5",
+      "kernel_release": "kernel-6",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-10T06:39:07Z",
+     "score": 1122379.2,
+     "utc_date": "2026-09-10"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-5",
+      "kernel_release": "kernel-6",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-11T06:37:18Z",
+     "score": 1124064.3,
+     "utc_date": "2026-09-11"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-5",
+      "kernel_release": "kernel-6",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-12T06:33:40Z",
+     "score": 1126937.8,
+     "utc_date": "2026-09-12"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-5",
+      "kernel_release": "kernel-6",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-13T06:32:32Z",
+     "score": 1120396.8,
+     "utc_date": "2026-09-13"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-5",
+      "kernel_release": "kernel-6",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-14T06:35:25Z",
+     "score": 1126052.2,
+     "utc_date": "2026-09-14"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-5",
+      "kernel_release": "kernel-6",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-15T06:30:02Z",
+     "score": 1129914.6,
+     "utc_date": "2026-09-15"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-5",
+      "kernel_release": "kernel-6",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-17T00:58:36Z",
+     "score": 1130163.4,
+     "utc_date": "2026-09-16"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-5",
+      "kernel_release": "kernel-6",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-17T06:38:52Z",
+     "score": 1128850.9,
+     "utc_date": "2026-09-17"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-22",
+      "kernel_release": "kernel-6",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-18T06:38:31Z",
+     "score": 1129830.9,
+     "utc_date": "2026-09-18"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-23",
+      "kernel_release": "kernel-6",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-19T06:38:03Z",
+     "score": 1116512.7,
+     "utc_date": "2026-09-19"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-24",
+      "kernel_release": "kernel-6",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-20T06:33:14Z",
+     "score": 1120059.4,
+     "utc_date": "2026-09-20"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-7",
+      "kernel_release": "kernel-6",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-21T12:09:10Z",
+     "score": 1119198.1,
+     "utc_date": "2026-09-21"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-8",
+      "kernel_release": "kernel-6",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-22T06:30:09Z",
+     "score": 1124119.3,
+     "utc_date": "2026-09-22"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-9",
+      "kernel_release": "kernel-6",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-23T06:28:58Z",
+     "score": 1130634.5,
+     "utc_date": "2026-09-23"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-9",
+      "kernel_release": "kernel-6",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-24T06:39:02Z",
+     "score": 1123548.4,
+     "utc_date": "2026-09-24"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-10",
+      "kernel_release": "kernel-6",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-25T06:35:36Z",
+     "score": 1119900.6,
+     "utc_date": "2026-09-25"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-10",
+      "kernel_release": "kernel-6",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-26T06:28:43Z",
+     "score": 1123263.1,
+     "utc_date": "2026-09-26"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-10",
+      "kernel_release": "kernel-6",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-27T06:35:19Z",
+     "score": 1115042.9,
+     "utc_date": "2026-09-27"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-10",
+      "kernel_release": "kernel-6",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-28T06:31:06Z",
+     "score": 1124829.3,
+     "utc_date": "2026-09-28"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-10",
+      "kernel_release": "kernel-6",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-29T06:36:06Z",
+     "score": 1117252.7,
+     "utc_date": "2026-09-29"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-10",
+      "kernel_release": "kernel-6",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-09-30T06:37:03Z",
+     "score": 1120925.2,
+     "utc_date": "2026-09-30"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-11",
+      "kernel_release": "kernel-6",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-01T06:38:29Z",
+     "score": 1121562.5,
+     "utc_date": "2026-10-01"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-11",
+      "kernel_release": "kernel-6",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-02T06:32:44Z",
+     "score": 1128648.9,
+     "utc_date": "2026-10-02"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-11",
+      "kernel_release": "kernel-6",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-03T06:32:56Z",
+     "score": 1121457.9,
+     "utc_date": "2026-10-03"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-11",
+      "kernel_release": "kernel-6",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-04T06:43:17Z",
+     "score": 1118589.9,
+     "utc_date": "2026-10-04"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-11",
+      "kernel_release": "kernel-6",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-05T06:31:47Z",
+     "score": 1122684.2,
+     "utc_date": "2026-10-05"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-11",
+      "kernel_release": "kernel-6",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-06T06:41:21Z",
+     "score": 1127275.4,
+     "utc_date": "2026-10-06"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-11",
+      "kernel_release": "kernel-6",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-07T06:42:16Z",
+     "score": 1124947.7,
+     "utc_date": "2026-10-07"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-11",
+      "kernel_release": "kernel-6",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-08T06:39:34Z",
+     "score": 1120427.1,
+     "utc_date": "2026-10-08"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-11",
+      "kernel_release": "kernel-6",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-09T06:33:36Z",
+     "score": 1121208.5,
+     "utc_date": "2026-10-09"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-11",
+      "kernel_release": "kernel-6",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-10T06:32:27Z",
+     "score": 1119524.6,
+     "utc_date": "2026-10-10"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-11",
+      "kernel_release": "kernel-6",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-11T06:35:56Z",
+     "score": 1125321.8,
+     "utc_date": "2026-10-11"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-11",
+      "kernel_release": "kernel-6",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-12T06:37:33Z",
+     "score": 1123628.7,
+     "utc_date": "2026-10-12"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-11",
+      "kernel_release": "kernel-6",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-13T06:29:44Z",
+     "score": 1119820.2,
+     "utc_date": "2026-10-13"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-11",
+      "kernel_release": "kernel-6",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-14T06:28:46Z",
+     "score": 1123048.4,
+     "utc_date": "2026-10-14"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-11",
+      "kernel_release": "kernel-6",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-15T06:30:23Z",
+     "score": 1121381.9,
+     "utc_date": "2026-10-15"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-11",
+      "kernel_release": "kernel-6",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-16T06:30:18Z",
+     "score": 1125913.3,
+     "utc_date": "2026-10-16"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-11",
+      "kernel_release": "kernel-6",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-17T06:31:54Z",
+     "score": 1118394.6,
+     "utc_date": "2026-10-17"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-11",
+      "kernel_release": "kernel-6",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-18T06:30:12Z",
+     "score": 1121855.2,
+     "utc_date": "2026-10-18"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-11",
+      "kernel_release": "kernel-6",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-19T06:43:36Z",
+     "score": 1120163.2,
+     "utc_date": "2026-10-19"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-11",
+      "kernel_release": "kernel-6",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-20T06:41:35Z",
+     "score": 1124205.6,
+     "utc_date": "2026-10-20"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-12",
+      "kernel_release": "kernel-6",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-21T06:34:37Z",
+     "score": 1121259.2,
+     "utc_date": "2026-10-21"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-12",
+      "kernel_release": "kernel-6",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-22T06:32:36Z",
+     "score": 1122327.8,
+     "utc_date": "2026-10-22"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-25",
+      "kernel_release": "kernel-6",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-23T06:29:56Z",
+     "score": 1121174.4,
+     "utc_date": "2026-10-23"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-25",
+      "kernel_release": "kernel-6",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-24T06:32:38Z",
+     "score": 1126474.0,
+     "utc_date": "2026-10-24"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-25",
+      "kernel_release": "kernel-6",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-25T06:33:16Z",
+     "score": 1124366.3,
+     "utc_date": "2026-10-25"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-25",
+      "kernel_release": "kernel-6",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-26T06:40:37Z",
+     "score": 1125736.4,
+     "utc_date": "2026-10-26"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-25",
+      "kernel_release": "kernel-6",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-27T06:35:07Z",
+     "score": 1122160.5,
+     "utc_date": "2026-10-27"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-25",
+      "kernel_release": "kernel-6",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-28T06:32:36Z",
+     "score": 1122970.1,
+     "utc_date": "2026-10-28"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-25",
+      "kernel_release": "kernel-6",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-29T06:39:11Z",
+     "score": 1122765.5,
+     "utc_date": "2026-10-29"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-25",
+      "kernel_release": "kernel-6",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-10-30T06:44:30Z",
+     "score": 1117802.9,
+     "utc_date": "2026-10-30"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-25",
+      "kernel_release": "kernel-6",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-11-03T20:00:23Z",
+     "score": 1119860.3,
+     "utc_date": "2026-11-03"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-13",
+      "kernel_release": "kernel-6",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-11-04T06:32:12Z",
+     "score": 1121876.2,
+     "utc_date": "2026-11-04"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-13",
+      "kernel_release": "kernel-6",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-11-05T06:37:05Z",
+     "score": 1121870.3,
+     "utc_date": "2026-11-05"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-14",
+      "kernel_release": "kernel-6",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-11-06T06:31:36Z",
+     "score": 1127542.0,
+     "utc_date": "2026-11-06"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-14",
+      "kernel_release": "kernel-7",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-11-07T06:42:49Z",
+     "score": 1121860.8,
+     "utc_date": "2026-11-07"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-14",
+      "kernel_release": "kernel-7",
+      "provenance_schema_version": 1
+     },
+     "measured_at": "2026-11-08T06:38:30Z",
+     "score": 1124698.1,
+     "utc_date": "2026-11-08"
+    },
+    {
+     "environment": {
+      "conductress_revision": "rev-15",
+      "kernel_release": "kernel-7",
+      "provenance_schema_version": 2
+     },
+     "measured_at": "2026-11-09T06:36:15Z",
+     "score": 1120635.2,
+     "utc_date": "2026-11-09"
+    }
+   ],
+   "paired": [],
+   "runner_id": "runner-d"
+  }
+ ]
+}

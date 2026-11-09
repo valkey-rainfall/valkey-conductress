@@ -6,7 +6,10 @@ import json
 import logging
 import secrets
 import sqlite3
-from datetime import timedelta
+import threading
+import time
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Optional
 
 from jsonschema import Draft202012Validator, FormatChecker
@@ -76,6 +79,8 @@ class ControlService:
         canary_notification_url: Optional[str] = None,
         canary_notify_warning: bool = False,
         published_canary_dir: Optional[Any] = None,
+        published_sweep_dir: Optional[Any] = None,
+        findings_interval_seconds: int = 3600,
     ):
         self.database = database
         self.registry = registry
@@ -93,6 +98,13 @@ class ControlService:
         # private build and host details). Falls back to the task directory.
         self.published_canary_dir = published_canary_dir if published_canary_dir is not None else published_tasks_dir
         self.results_jsonl_path = results_jsonl_path
+        # Where the runners' publishers put the sweep manifests and series (read
+        # for manual events, explanations and paired evidence). Defaults to the
+        # canary directory, which is the same web root on the data host.
+        self.published_sweep_dir = published_sweep_dir if published_sweep_dir is not None else self.published_canary_dir
+        self.findings_interval_seconds = findings_interval_seconds
+        self._findings_lock = threading.Lock()
+        self._findings_published_at: Optional[float] = None
         # Injectable HTTP delivery for the approval webhook; defaults to urlopen.
         self._notifier = notifier or _default_notifier
         self.task_validator = _validator("task-envelope.schema.json")
@@ -343,6 +355,52 @@ class ControlService:
             self._write_static(canary_dir / "fleet.json", fleet)
         except Exception:  # pylint: disable=broad-except
             logger.warning("unable to publish canary status", exc_info=True)
+        self.publish_canary_findings()
+
+    def canary_findings(self, now: Optional[datetime] = None) -> tuple[dict[str, Any], dict[str, Any]]:
+        """The canary-page documents: ranked environment events and per-runner consistency."""
+        from .findings import build_findings
+        from .findings_sources import load_runner_inputs
+
+        sweep_dir = Path(self.published_sweep_dir) if self.published_sweep_dir is not None else None
+        inputs = load_runner_inputs(self.database, self.registry, sweep_dir)
+        return build_findings(inputs, now=now or datetime.now(timezone.utc))
+
+    def publish_canary_findings(self, now: Optional[datetime] = None) -> bool:
+        """Write ``canary/findings.json`` and ``canary/consistency.json``; False when skipped or failed.
+
+        One analysis at a time: a call while another runs returns False at
+        once. Failures are logged and never propagate (like the status files).
+        """
+        if self.published_canary_dir is None:
+            return False
+        if not self._findings_lock.acquire(blocking=False):
+            return False
+        try:
+            findings, consistency = self.canary_findings(now)
+            canary_dir = self._public_dir(self.published_canary_dir / "canary")
+            self._write_static(canary_dir / "findings.json", findings)
+            self._write_static(canary_dir / "consistency.json", consistency)
+            return True
+        except Exception:  # pylint: disable=broad-except
+            logger.warning("unable to publish canary findings", exc_info=True)
+            return False
+        finally:
+            # A failed run also waits for the interval: no retry on every status push.
+            self._findings_published_at = time.monotonic()
+            self._findings_lock.release()
+
+    def publish_canary_findings_if_due(self) -> bool:
+        """Publish the findings when the last publication is older than the interval.
+
+        Called on runner status pushes, so manual events and explanations that
+        reach the sweep manifests are picked up within the interval without a
+        timer of its own.
+        """
+        last = self._findings_published_at
+        if last is not None and time.monotonic() - last < self.findings_interval_seconds:
+            return False
+        return self.publish_canary_findings()
 
     # The published files are public by design (served by the web server with
     # no auth), while the service itself runs with a restrictive umask (0077 in

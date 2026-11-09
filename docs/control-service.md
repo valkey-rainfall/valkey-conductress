@@ -236,6 +236,27 @@ is posted with its phase: it is a notice about an uncalibrated series, not a
 verdict. `actionable` stays false; nothing acts on a notice automatically. A
 replayed outcome posts nothing.
 
+### Canary findings
+
+With the status files the service also writes `canary/findings.json` (the
+environment events of every runner, tested and ranked) and
+`canary/consistency.json` (per-runner consistency signals) for the dashboard's
+canary page. It writes them after each accepted canary observation, at
+startup, and on a runner status push when the last run is older than
+`FINDINGS_INTERVAL_SECONDS` (default 3600, minimum 60), off the event loop
+and one run at a time. It reads the sweep manifests and series from
+`PUBLISHED_SWEEP_DIR` (default: the canary directory; on the production data
+host both are the same web root, where the runners' publishers put
+the sweep files). The method and the document fields are in
+`docs/canary-drift-analysis.md`, "Findings". To run the analysis by hand
+(as the service user, which can read the database):
+
+```
+conductress-control findings            # text summary of the ranked events
+conductress-control findings --json     # both documents
+conductress-control findings --publish  # write the two files now
+```
+
 ## Results on the data host
 
 At completion a runner pushes the full result record, not a truncated summary. The control plane stores it in the task's SQLite row (authoritative). When configured it also mirrors each completed task to an append-only results JSONL (`RESULTS_JSONL_PATH`) and publishes a static per-task JSON under the published tasks directory (`PUBLISHED_TASKS_DIR/tasks/<task_id>.json`), written atomically. The static files carry no auth (results are public) so the dashboard and agents can fetch them directly, and `GET /api/v1/tasks/{task_id}` and `GET /api/v1/batches/{batch_id}` return the same records over the API.

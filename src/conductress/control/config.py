@@ -31,6 +31,12 @@ class ControlConfig:
     # task files: a task record can carry private build and host details, the
     # canary status cannot, so a deployment may publish only the canary files.
     published_canary_dir: Optional[Path] = None
+    # Where the runners' publishers put the sweep manifests and series that the
+    # canary findings read (manual events, explanations, paired evidence).
+    # Defaults to the canary directory: on the data host both are the web root.
+    published_sweep_dir: Optional[Path] = None
+    # Shortest time between two findings publications triggered by status pushes.
+    findings_interval_seconds: int = 3600
     results_jsonl_path: Optional[Path] = None
     github_token: Optional[str] = None
     github_verification_enabled: bool = False
@@ -44,6 +50,7 @@ class ControlConfig:
         users_value = os.environ.get("USERS_PATH", "/etc/conductress-control/users.toml")
         published_value = os.environ.get("PUBLISHED_TASKS_DIR")
         canary_value = os.environ.get("PUBLISHED_CANARY_DIR") or published_value
+        sweep_value = os.environ.get("PUBLISHED_SWEEP_DIR") or canary_value
         results_value = os.environ.get("RESULTS_JSONL_PATH", "/var/log/conductress-control/results.jsonl")
         github_token = os.environ.get("GITHUB_TOKEN") or None
         verification = os.environ.get("PROVENANCE_VERIFICATION", "").lower() in {"1", "true", "yes"}
@@ -58,6 +65,8 @@ class ControlConfig:
             canary_notify_warning=os.environ.get("CANARY_NOTIFY_WARNING", "").lower() in {"1", "true", "yes"},
             published_tasks_dir=Path(published_value) if published_value else None,
             published_canary_dir=Path(canary_value) if canary_value else None,
+            published_sweep_dir=Path(sweep_value) if sweep_value else None,
+            findings_interval_seconds=int(os.environ.get("FINDINGS_INTERVAL_SECONDS", "3600")),
             results_jsonl_path=Path(results_value) if results_value else None,
             github_token=github_token,
             github_verification_enabled=verification,
@@ -69,5 +78,7 @@ class ControlConfig:
     def validate(self) -> None:
         if self.claim_lease_seconds < 1:
             raise ValueError("claim_lease_seconds must be positive")
+        if self.findings_interval_seconds < 60:
+            raise ValueError("findings_interval_seconds must be at least 60")
         if self.max_body_bytes < 1024:
             raise ValueError("max_body_bytes must be at least 1024")

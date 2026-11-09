@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from typing import Any, Optional
@@ -189,6 +190,8 @@ def create_app(
         canary_notify_warning=config.canary_notify_warning,
         published_tasks_dir=config.published_tasks_dir,
         published_canary_dir=config.published_canary_dir,
+        published_sweep_dir=config.published_sweep_dir,
+        findings_interval_seconds=config.findings_interval_seconds,
         results_jsonl_path=config.results_jsonl_path,
     )
     service.expire_stale_claims(actor="system:startup")
@@ -368,6 +371,8 @@ async def _push_status(request: web.Request) -> web.Response:
         request.app[SCHEDULER_KEY].tick()
     except Exception:
         logger.warning("canary tick failed during status push", exc_info=True)
+    # The findings analysis takes a few seconds: run it off the event loop, at most once per interval.
+    asyncio.get_running_loop().run_in_executor(None, request.app[SERVICE_KEY].publish_canary_findings_if_due)
     return _response(updated=True)
 
 

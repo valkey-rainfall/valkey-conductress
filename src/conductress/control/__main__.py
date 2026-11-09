@@ -66,6 +66,39 @@ def _archive_runner(args: argparse.Namespace, parser: argparse.ArgumentParser) -
     print(format_manifest_entry(result.manifest_entry))
 
 
+def _findings(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None:
+    import json
+
+    from .db import ControlDatabase
+    from .fleet_registry import FleetRegistry
+    from .service import ControlService
+
+    config = ControlConfig.from_env()
+    if not config.database_path.exists():
+        parser.error(f"database not found: {config.database_path}")
+    service = ControlService(
+        ControlDatabase(config.database_path, config.audit_jsonl_path),
+        FleetRegistry.from_file(config.fleet_manifest_path),
+        published_canary_dir=config.published_canary_dir,
+        published_sweep_dir=config.published_sweep_dir,
+    )
+    if args.publish:
+        if not service.publish_canary_findings():
+            print("error: findings were not published (see the log)")
+            sys.exit(1)
+        print(f"published canary/findings.json and canary/consistency.json under {config.published_canary_dir}")
+        return
+    findings, consistency = service.canary_findings()
+    if args.json:
+        print(json.dumps({"findings": findings, "consistency": consistency}, indent=2, sort_keys=True))
+        return
+    print(f"open findings: {findings['open_count']}  states: {findings['state_counts']}")
+    for event in findings["events"][: args.limit]:
+        effect = event.get("effect_pct")
+        effect_text = f"{effect:+.2f}%" if isinstance(effect, (int, float)) else "-"
+        print(f"  {event['state']:<18} {event['event_id']:<32} {event['kind']:<18} {effect_text}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="conductress-control")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -89,6 +122,15 @@ def main() -> None:
     archive.add_argument("--backup", default=None, help="Backup path (default: <db>.pre-archive-<archive-id>.db)")
     archive.add_argument("--dry-run", action="store_true", help="Only count the rows that would move")
     archive.add_argument("--force", action="store_true", help="Run even if the control service is active (unsafe)")
+    findings = subparsers.add_parser(
+        "findings",
+        help="Run the canary findings analysis (events, statistics, ranking) and print or publish it",
+    )
+    findings.add_argument("--json", action="store_true", help="Print both documents as JSON")
+    findings.add_argument("--limit", type=int, default=20, help="Events to list in the text summary")
+    findings.add_argument(
+        "--publish", action="store_true", help="Write canary/findings.json and canary/consistency.json"
+    )
     args = parser.parse_args()
 
     if args.command == "hash-token":
@@ -99,6 +141,9 @@ def main() -> None:
         return
     if args.command == "archive-runner":
         _archive_runner(args, parser)
+        return
+    if args.command == "findings":
+        _findings(args, parser)
         return
 
     config = ControlConfig.from_env()
