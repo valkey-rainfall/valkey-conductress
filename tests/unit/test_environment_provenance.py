@@ -338,7 +338,24 @@ class TestPeriods:
         periods = exporter._build_periods(points)
         assert [p["period"] for p in points] == [0, 0, 1, 1]
         assert periods[1]["boot_only"] is False and "kernel_release: 6.1.170 -> 6.1.189" in periods[1]["label"]
-        assert periods[1]["start_commit_index"] == 2 and periods[1]["env"] == after
+        # The published period carries the public view of the environment: no boot id.
+        assert periods[1]["start_commit_index"] == 2
+        assert periods[1]["env"] == {
+            "provenance_schema_version": 2,
+            "kernel_release": "6.1.189",
+            "glibc_version": "2.34",
+        }
+
+    def test_private_fields_publish_as_the_type_of_change(self):
+        sha_a, sha_b = "a" * 40, "b" * 40
+        before = dict(self.BASE, conductress_revision=sha_a, instance_id="i-0123456789abcdef0")
+        after = dict(before, conductress_revision=sha_b, instance_id="i-0fedcba9876543210", boot_id="b")
+        points = [_entry(0, before), _entry(1, after)]
+        periods = exporter._build_periods(points)
+        assert periods[1]["label"] == "reboot; harness revision changed; host replaced"
+        assert periods[1]["boot_only"] is False
+        text = json.dumps(periods)
+        assert sha_a not in text and sha_b not in text and "i-0" not in text and "boot_id" not in text
 
     def test_boot_only_period_is_marked_lightly(self):
         points = [_entry(0, self.BASE), _entry(1, dict(self.BASE, boot_id="b"))]
@@ -350,7 +367,7 @@ class TestPeriods:
         points = [_entry(0, None), _entry(1, v1), _entry(2, self.BASE), _entry(3, None), _entry(4, self.BASE)]
         periods = exporter._build_periods(points)
         assert len(periods) == 1 and [p["period"] for p in points] == [0] * 5
-        assert periods[0]["env"] == v1  # the first recorded environment names the period
+        assert periods[0]["env"] == v1  # the first recorded environment names the period (public keys only)
 
     def test_manual_event_opens_a_period(self):
         event = {"at": datetime(2026, 11, 6, 18, 0, tzinfo=timezone.utc), "label": "BIOS update"}

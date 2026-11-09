@@ -13,6 +13,7 @@ from jsonschema import Draft202012Validator, FormatChecker
 from jsonschema.exceptions import ValidationError
 
 from ..duration_estimator import estimate_task_duration_seconds
+from ..public_fields import public_canary_status
 from .canary_profiles import CanaryProfileRegistry
 from .db import ControlDatabase, parse_utc, utc_now, utc_text
 from .drift_analyzer import DriftAnalyzer
@@ -330,7 +331,10 @@ class ControlService:
             return
         try:
             canary_dir = self._public_dir(self.published_canary_dir / "canary")
-            fleet = self.canary_status()
+            # Allowlist projection: the API document carries the recorded
+            # environment (harness SHAs, instance and boot ids); the public
+            # files carry only what public_fields.py allows.
+            fleet = public_canary_status(self.canary_status())
             for entry in fleet["runners"]:
                 if runner_id is None or entry["runner_id"] == runner_id:
                     self._write_static(

@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, Callable, Optional
 
 from conductress.config import ANNOTATION_THRESHOLD
 from conductress.heap_profiler import recategorize_from_stacks
+from conductress.public_fields import EVENT_PREFIX, public_change_label, public_environment, public_generation
 from conductress.sweep.planner import BenchmarkPoint, PointStatus, Segment, SweepPlanner, SweepState
 
 if TYPE_CHECKING:
@@ -467,7 +468,7 @@ def _build_periods(points: list[dict[str, Any]], events: Optional[list[dict[str,
     joins the period of the previous point, so a deploy that starts recording
     draws no boundary by itself.
     """
-    from conductress.control.drift_analyzer import boot_only, change_label, environment_changes
+    from conductress.control.drift_analyzer import boot_only, environment_changes
 
     events = sorted(events or [], key=lambda e: e["at"])
     periods: list[dict[str, Any]] = []
@@ -482,29 +483,29 @@ def _build_periods(points: list[dict[str, Any]], events: Optional[list[dict[str,
             changes = environment_changes(prev_env, env)
             if bucket is not None and prev_bucket is not None and bucket != prev_bucket:
                 for event in events[prev_bucket:bucket]:
-                    changes.append(f"event: {event.get('label', 'environment event')}")
+                    changes.append(f"{EVENT_PREFIX}{event.get('label', 'environment event')}")
         if current is None or changes:
+            # The published period carries the PUBLIC view of the environment
+            # and of the change (public_fields.py): versions stay, a harness
+            # SHA or boot id becomes the type of change.
+            recorded = [c for c in changes if not c.startswith(EVENT_PREFIX)]
             current = {
                 "id": len(periods),
                 "start_commit_index": entry["commit_index"],
                 "end_commit_index": entry["commit_index"],
                 "start_date": entry["date"],
                 "end_date": entry["date"],
-                "env": env,
-                "boot_only": boot_only(changes) if changes else False,
-                "label": change_label([c for c in changes if not c.startswith("event: ")]) if changes else "",
+                "env": public_environment(env),
+                "boot_only": boot_only(recorded) and len(recorded) == len(changes),
+                "label": public_change_label(changes) if changes else "",
             }
-            event_labels = [c[len("event: ") :] for c in changes if c.startswith("event: ")]
-            if event_labels:
-                current["label"] = "; ".join(filter(None, [current["label"], *event_labels]))
-                current["boot_only"] = False
             periods.append(current)
         else:
             last = periods[-1]
             last["end_commit_index"] = entry["commit_index"]
             last["end_date"] = entry["date"]
             if last["env"] is None and env is not None:
-                last["env"] = env
+                last["env"] = public_environment(env)
         if env is not None:
             prev_env = env
         if bucket is not None:
@@ -1190,13 +1191,13 @@ def export_manifest(
         ]
         + PERF_GROUPS
         + PER_THREAD_PERF_GROUPS,
-        "generations": list(generations or []),
+        "generations": [public_generation(g) for g in (generations or [])],
     }
     output_dir.mkdir(parents=True, exist_ok=True)
     filename = f"manifest-{platform_id}.json" if epoch_id == "v1" else f"manifest-{platform_id}.epoch-{epoch_id}.json"
     if generation is not None:
         from conductress.sweep.generations import generation_path
 
-        manifest["generation"] = dict(generation)
+        manifest["generation"] = public_generation(generation)
         filename = generation_path(Path(filename), generation["id"]).name
     (output_dir / filename).write_text(json.dumps(manifest, indent=2))

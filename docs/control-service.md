@@ -187,15 +187,33 @@ When `NOTIFICATION_URL` is set, the control plane POSTs a small JSON notice to t
 After every newly accepted canary observation the service writes two static
 files under the published canary directory (`PUBLISHED_CANARY_DIR`; default:
 `PUBLISHED_TASKS_DIR`), no auth like the task files:
-`canary/<runner_id>.json` (`{"schema_version": 1, "runner": <the entry GET
-/api/v1/canary/status returns for that runner>}`) and `canary/fleet.json`
-(the whole status document). They are also written at startup. The dashboard
-reads them for the runner cards and the platform banner.
+`canary/<runner_id>.json` (`{"schema_version": 1, "runner": <the public
+projection of the entry GET /api/v1/canary/status returns for that runner>}`)
+and `canary/fleet.json` (the projection of the whole status document). They
+are also written at startup. The dashboard reads them for the runner cards and
+the platform banner.
+
+The public files are an ALLOWLIST projection (`public_fields.py`), not a copy
+of the API document. The API keeps the recorded environment of every
+observation (harness revision, load generator commit, instance id, boot id,
+host fingerprint); the files keep only the keys the allowlist names: runner
+and profile identity, dates, scores, median, MAD, thresholds, phase and state,
+the schedule, the calibration report, and of the environment only package
+versions and CPU words (`kernel_release`, `glibc_version`, `cpu_microcode`,
+`cpu_model`, `packages`, ...). The change annotation keeps version changes as
+`field: old -> new` and turns private fields into the type of change:
+`harness revision changed`, `load generator changed`, `reboot`, `host
+replaced`. `environment_json` is never published. A key the allowlist has not
+classified is dropped, and `unknown_canary_keys` makes the test suite fail on
+it, so a new API field is decided before it can be published. The same module
+gives the sweep exporter its period labels and environments and drops
+`closed_by` from a manifest's generation entries.
 
 The two directories are separate on purpose. A task record repeats the task
 envelope and the full result (source, specifier, note, binary paths, the
 client TOML, host details), which can name private builds and hosts. A canary
-status only carries the public canary profile and the runner environment.
+status only carries the public canary profile and the public runner
+environment.
 A deployment that must not publish task records sets `PUBLISHED_CANARY_DIR`
 and leaves `PUBLISHED_TASKS_DIR` unset. The production data host does exactly
 that, and as a second guard its nginx server block answers 404 for `/tasks/`
