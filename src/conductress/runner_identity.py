@@ -31,7 +31,8 @@ RUNNER_INFO_SCHEMA_VERSION = 1
 # reports ``2.34`` before and after a glibc update; the package release moves.
 PROVENANCE_SCHEMA_VERSION = 3
 PACKAGE_NAMES = ("kernel", "glibc", "microcode_ctl", "tuned")
-_RPM_QUERY = ["rpm", "-q", "--qf", "%{NAME}=%{VERSION}-%{RELEASE}\n", *PACKAGE_NAMES]
+_RPM_FORMAT = "%{NAME}=%{VERSION}-%{RELEASE}\n"
+_RPM_QUERY = ["-q", "--qf", _RPM_FORMAT, *PACKAGE_NAMES]
 _RPM_TIMEOUT_SECONDS = 2.0
 _RUNNER_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
 _ALLOWED_CONFIG_KEYS = {"schema_version", "runner_id", "display_name"}
@@ -64,6 +65,7 @@ HOST_FIELDS = (
 REMOTE_ENVIRONMENT_COMMAND = (
     "echo packages=$(rpm -q --qf '%{NAME}=%{VERSION}-%{RELEASE},' " + " ".join(PACKAGE_NAMES) + " 2>/dev/null"
     " | tr '\\n' ','); "
+    "echo running_kernel=$(rpm -qf --qf '%{NAME}=%{VERSION}-%{RELEASE}' /boot/vmlinuz-$(uname -r) 2>/dev/null); "
     "echo kernel_release=$(uname -r); echo machine=$(uname -m); "
     "echo boot_id=$(cat /proc/sys/kernel/random/boot_id 2>/dev/null); "
     "echo machine_id=$(cat /etc/machine-id 2>/dev/null || cat /var/lib/dbus/machine-id 2>/dev/null); "
@@ -223,14 +225,20 @@ def _boot_id(path: Path = Path("/proc/sys/kernel/random/boot_id")) -> Optional[s
     return _read_first([path])
 
 
-def parse_package_versions(items: list[str], kernel_release: Optional[str] = None) -> dict[str, Optional[str]]:
+def parse_package_versions(
+    items: list[str], kernel_release: Optional[str] = None, running_kernel: Optional[str] = None
+) -> dict[str, Optional[str]]:
     """``{name: version-release}`` for :data:`PACKAGE_NAMES` from ``name=version-release`` items.
 
     Items that are not of that form (rpm's ``package X is not installed``) are
-    skipped; a package without an item is None. Several installed kernels are
-    normal (the previous one stays until it is removed); the one whose
-    version-release is the prefix of the running ``kernel_release`` wins, else
-    the last listed.
+    skipped; a package without an item is None. ``kernel`` is the package the
+    running kernel image belongs to: ``running_kernel`` is that package's own
+    ``name=version-release`` item (``rpm -qf /boot/vmlinuz-<release>``), which
+    also covers distributions whose kernel package is not named ``kernel``
+    (``kernel6.18`` on Amazon Linux 2023, ``kernel-core`` on RHEL). Without it,
+    several installed ``kernel`` packages are normal (the previous one stays
+    until removed); the one whose version-release is the prefix of
+    ``kernel_release`` wins, else the last listed.
     """
     found: dict[str, list[str]] = {name: [] for name in PACKAGE_NAMES}
     for item in items:
@@ -246,20 +254,40 @@ def parse_package_versions(items: list[str], kernel_release: Optional[str] = Non
             if running:
                 chosen = running[0]
         packages[name] = chosen
+    if running_kernel:
+        _, sep, version = running_kernel.strip().partition("=")
+        if sep and version:
+            packages["kernel"] = version
     return packages
+
+
+def _rpm(args: list[str]) -> Optional[str]:
+    """stdout of an rpm query (may be partial on a non-zero exit); None where rpm is missing, fails or hangs."""
+    try:
+        result = subprocess.run(
+            ["rpm", *args], capture_output=True, text=True, timeout=_RPM_TIMEOUT_SECONDS, check=False
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return result.stdout if result.stdout.strip() else None
 
 
 def _installed_packages(kernel_release: Optional[str] = None) -> Optional[dict[str, Optional[str]]]:
     """The installed version-release of :data:`PACKAGE_NAMES` via rpm; None where rpm is missing or fails."""
-    try:
-        result = subprocess.run(_RPM_QUERY, capture_output=True, text=True, timeout=_RPM_TIMEOUT_SECONDS, check=False)
-    except (OSError, subprocess.SubprocessError):
-        return None
     # rpm exits non-zero when any package is not installed; its stdout still
     # lists the installed ones, one per line.
-    if not result.stdout.strip():
+    listed = _rpm(_RPM_QUERY)
+    if listed is None:
         return None
-    return parse_package_versions(result.stdout.splitlines(), kernel_release)
+    running_kernel = None
+    if kernel_release:
+        # The package the running kernel image belongs to (``kernel6.18`` on
+        # AL2023's 6.18 stream, ``kernel-core`` on RHEL); a non-zero exit
+        # (no such file, not owned) leaves it None.
+        running_kernel = _rpm(["-qf", "--qf", _RPM_FORMAT, f"/boot/vmlinuz-{kernel_release}"])
+        if running_kernel and running_kernel.startswith(("file ", "error:")):
+            running_kernel = None
+    return parse_package_versions(listed.splitlines(), kernel_release, running_kernel)
 
 
 @lru_cache(maxsize=8)
@@ -344,7 +372,9 @@ def parse_remote_environment(text: str) -> dict[str, Any]:
     }
     packages_field = field("packages")
     if packages_field:
-        env["packages"] = parse_package_versions(packages_field.split(","), env["kernel_release"])
+        env["packages"] = parse_package_versions(
+            packages_field.split(","), env["kernel_release"], field("running_kernel")
+        )
     return env
 
 

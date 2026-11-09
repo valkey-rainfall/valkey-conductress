@@ -72,27 +72,62 @@ class TestHostFields:
         "glibc=2.34-231.amzn2023.0.5\nmicrocode_ctl=2.1-53.amzn2023.0.16\npackage tuned is not installed\n"
     )
 
+    @staticmethod
+    def _fake_rpm(listed: str, image_owner: str, image_rc: int = 0):
+        """A ``subprocess.run`` double answering the package list and the ``-qf /boot/vmlinuz-*`` query."""
+
+        def run(argv, **kwargs):
+            assert argv[0] == "rpm" and kwargs["timeout"] == 2.0
+            if argv[1] == "-qf":
+                assert argv[2:4] == ["--qf", ri._RPM_FORMAT] and argv[4].startswith("/boot/vmlinuz-")
+                return subprocess.CompletedProcess(argv, image_rc, stdout=image_owner, stderr="")
+            assert argv[1:] == ri._RPM_QUERY
+            return subprocess.CompletedProcess(argv, 1, stdout=listed, stderr="")
+
+        return run
+
     def test_installed_packages_pick_the_running_kernel_and_skip_missing_ones(self):
-        completed = subprocess.CompletedProcess(ri._RPM_QUERY, 1, stdout=self.RPM_OUTPUT, stderr="")
-        with patch.object(ri.subprocess, "run", return_value=completed) as run:
+        running = "kernel=6.1.189-236.400.amzn2023\n"
+        with patch.object(ri.subprocess, "run", side_effect=self._fake_rpm(self.RPM_OUTPUT, running)):
             packages = ri._installed_packages("6.1.189-236.400.amzn2023.x86_64")
-        assert run.call_args.args[0] == ["rpm", "-q", "--qf", "%{NAME}=%{VERSION}-%{RELEASE}\n", *ri.PACKAGE_NAMES]
-        assert run.call_args.kwargs["timeout"] == 2.0
         assert packages == {
             "kernel": "6.1.189-236.400.amzn2023",
             "glibc": "2.34-231.amzn2023.0.5",
             "microcode_ctl": "2.1-53.amzn2023.0.16",
             "tuned": None,
         }
-        # No running-kernel match: the last listed kernel.
+        # Without the image owner: prefix match on the listed kernels, else the last listed.
+        assert ri.parse_package_versions(self.RPM_OUTPUT.splitlines(), "6.1.170-213.321.amzn2023.x86_64")["kernel"] == (
+            "6.1.170-213.321.amzn2023"
+        )
         assert ri.parse_package_versions(self.RPM_OUTPUT.splitlines(), "5.10.0")["kernel"] == "6.1.189-236.400.amzn2023"
+
+    def test_versioned_kernel_package_is_found_through_the_running_image(self):
+        """AL2023's 6.18 stream ships ``kernel6.18``, RHEL ships ``kernel-core``: ``rpm -q kernel``
+        lists nothing, ``rpm -qf /boot/vmlinuz-<release>`` names the package the image belongs to."""
+        listed = "package kernel is not installed\nglibc=2.34-231.amzn2023.0.5\npackage tuned is not installed\n"
+        owner = "kernel6.18=6.18.56-125.164.amzn2023\n"
+        with patch.object(ri.subprocess, "run", side_effect=self._fake_rpm(listed, owner)):
+            packages = ri._installed_packages("6.18.56-125.164.amzn2023.aarch64")
+        assert packages["kernel"] == "6.18.56-125.164.amzn2023" and packages["glibc"] == "2.34-231.amzn2023.0.5"
+        # RHEL: the image belongs to kernel-core.
+        with patch.object(
+            ri.subprocess, "run", side_effect=self._fake_rpm(listed, "kernel-core=5.14.0-687.66.1.el9_8\n")
+        ):
+            assert ri._installed_packages("5.14.0-687.66.1.el9_8.aarch64")["kernel"] == "5.14.0-687.66.1.el9_8"
+        # The image query failing (no /boot/vmlinuz-<release>, or the file is not owned) leaves kernel None.
+        not_owned = "file /boot/vmlinuz-6.18.56 is not owned by any package\n"
+        with patch.object(ri.subprocess, "run", side_effect=self._fake_rpm(listed, not_owned, image_rc=1)):
+            assert ri._installed_packages("6.18.56")["kernel"] is None
+        with patch.object(ri.subprocess, "run", side_effect=self._fake_rpm(listed, "", image_rc=1)):
+            assert ri._installed_packages("6.18.56")["kernel"] is None
 
     def test_installed_packages_without_rpm_or_on_timeout_is_none(self):
         with patch.object(ri.subprocess, "run", side_effect=FileNotFoundError("rpm")):
             assert ri._installed_packages("6.1") is None
         with patch.object(ri.subprocess, "run", side_effect=subprocess.TimeoutExpired("rpm", 2.0)):
             assert ri._installed_packages("6.1") is None
-        empty = subprocess.CompletedProcess(ri._RPM_QUERY, 1, stdout="", stderr="rpm: command not found")
+        empty = subprocess.CompletedProcess(["rpm", *ri._RPM_QUERY], 1, stdout="", stderr="rpm: command not found")
         with patch.object(ri.subprocess, "run", return_value=empty):
             assert ri._installed_packages("6.1") is None
 
@@ -201,6 +236,12 @@ class TestRemoteEnvironment:
             "microcode_ctl": None,
             "tuned": None,
         }
+        # A versioned kernel package: the image owner line names it.
+        versioned = (
+            self.OUTPUT + "\npackages=glibc=2.34-231.amzn2023.0.5,\nrunning_kernel=kernel6.18=6.18.56-125.164.amzn2023"
+        )
+        assert ri.parse_remote_environment(versioned)["packages"]["kernel"] == "6.18.56-125.164.amzn2023"
+        assert "running_kernel=$(rpm -qf" in ri.REMOTE_ENVIRONMENT_COMMAND
 
     def test_truncated_output_never_raises(self):
         env = ri.parse_remote_environment("kernel_release=6.1\nmach")
