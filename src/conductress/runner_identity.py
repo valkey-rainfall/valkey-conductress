@@ -45,6 +45,9 @@ _UNKNOWN_REVISION = "unknown"
 PERIOD_FIELDS = ("kernel_release", "glibc_version", "cpu_microcode", "conductress_revision", "cachecannon_commit")
 BOOT_FIELDS = ("boot_id",)
 # Host-level fields read on the server host as well (``server_environment``).
+# How long the server-host command samples CPU before a task (outside any
+# measured window; the previous server has exited, this task's has not started).
+FOREIGN_CPU_SAMPLE_SECONDS = 2
 HOST_FIELDS = (
     "host_fingerprint",
     "instance_id",
@@ -68,6 +71,16 @@ REMOTE_ENVIRONMENT_COMMAND = (
     "echo running_kernel=$(rpm -qf --qf '%{NAME}=%{VERSION}-%{RELEASE}' /boot/vmlinuz-$(uname -r) 2>/dev/null); "
     "echo loadavg=$(cut -d' ' -f1-3 /proc/loadavg 2>/dev/null); "
     "echo runner_unit=$(systemctl is-active conductress.service 2>/dev/null); "
+    # Foreign CPU: busy jiffies of the whole host over FOREIGN_CPU_SAMPLE_SECONDS,
+    # minus the jiffies of any valkey-server (a server still exiting is not
+    # foreign load), in cores. The load average cannot do this: it lags by
+    # minutes and still carries the previous task's io threads.
+    "echo foreign_cpu=$(s() { b=$(awk '/^cpu /{print $2+$3+$4+$7+$8+$9}' /proc/stat); "
+    "v=$(for p in $(pgrep -x valkey-server); do awk '{print $14+$15}' /proc/$p/stat 2>/dev/null; done "
+    "| awk '{s+=$1} END{print s+0}'); echo \"$b $v\"; }; a=$(s); sleep " + str(FOREIGN_CPU_SAMPLE_SECONDS) + "; "
+    'b=$(s); echo "$a $b" | awk -v hz=$(getconf CLK_TCK 2>/dev/null || echo 100) '
+    "-v t=" + str(FOREIGN_CPU_SAMPLE_SECONDS) + " '{d=($4-$2); if (d<0) d=0; printf \"%.3f\", (($3-$1)-d)/hz/t}'); "
+    "echo valkey_server_procs=$(pgrep -cx valkey-server); "
     "echo kernel_release=$(uname -r); echo machine=$(uname -m); "
     "echo boot_id=$(cat /proc/sys/kernel/random/boot_id 2>/dev/null); "
     "echo machine_id=$(cat /etc/machine-id 2>/dev/null || cat /var/lib/dbus/machine-id 2>/dev/null); "
@@ -373,6 +386,8 @@ def parse_remote_environment(text: str) -> dict[str, Any]:
         # there (a runner on a benchmark server competes with the measured
         # server; see TaskRunner._server_environment).
         "load_1m": load_1m,
+        "foreign_cpu_cores": _float_or_none(field("foreign_cpu")),
+        "valkey_server_procs": _int_or_none(field("valkey_server_procs")),
         "runner_unit": field("runner_unit"),
         "instance_id": field("instance_id"),
         "kernel_release": field("kernel_release"),
@@ -391,9 +406,24 @@ def parse_remote_environment(text: str) -> dict[str, Any]:
     return env
 
 
-# A remote server host with more than this 1-minute load average before the
-# task is reported as busy (an idle benchmark server sits near 0).
-SERVER_HOST_BUSY_LOAD = 1.0
+# A remote server host whose processes other than valkey-server used more than
+# this many cores over the sample before the task is reported as busy (an idle
+# benchmark server sits near 0.02).
+SERVER_HOST_BUSY_CORES = 0.5
+
+
+def _float_or_none(value: Optional[str]) -> Optional[float]:
+    try:
+        return float(value) if value else None
+    except ValueError:
+        return None
+
+
+def _int_or_none(value: Optional[str]) -> Optional[int]:
+    try:
+        return int(value) if value else None
+    except ValueError:
+        return None
 
 
 def server_host_busy_warning(environment: dict[str, Any]) -> Optional[str]:
@@ -402,9 +432,13 @@ def server_host_busy_warning(environment: dict[str, Any]) -> Optional[str]:
     Two signals from the host command: a Conductress runner unit that is
     ``active`` or ``activating`` on the server (a runner on a benchmark server
     has no local server to drive and crash loops, taking CPU from the measured
-    server), and a 1-minute load average above :data:`SERVER_HOST_BUSY_LOAD`.
-    The runner's own host (``same_host``) is never judged here: its load is
-    the runner itself.
+    server), and ``foreign_cpu_cores``, the CPU used by processes other than
+    valkey-server over a direct sample of :data:`FOREIGN_CPU_SAMPLE_SECONDS`,
+    above :data:`SERVER_HOST_BUSY_CORES`. ``load_1m`` is recorded but never a
+    trigger: the load average lags by minutes and still carries the previous
+    task's io threads (about 50 after an io62 task on an idle host). The
+    runner's own host (``same_host``) is never judged here: its load is the
+    runner itself.
     """
     if environment.get("same_host"):
         return None
@@ -412,9 +446,12 @@ def server_host_busy_warning(environment: dict[str, Any]) -> Optional[str]:
     unit = environment.get("runner_unit")
     if unit in ("active", "activating", "reloading"):
         reasons.append(f"a Conductress runner unit is {unit} on the server host")
-    load = environment.get("load_1m")
-    if isinstance(load, (int, float)) and load > SERVER_HOST_BUSY_LOAD:
-        reasons.append(f"1-minute load average {load:.2f} > {SERVER_HOST_BUSY_LOAD}")
+    cores = environment.get("foreign_cpu_cores")
+    if isinstance(cores, (int, float)) and cores > SERVER_HOST_BUSY_CORES:
+        reasons.append(
+            f"processes other than valkey-server used {cores:.2f} cores over {FOREIGN_CPU_SAMPLE_SECONDS} s "
+            f"(> {SERVER_HOST_BUSY_CORES})"
+        )
     return "; ".join(reasons) or None
 
 

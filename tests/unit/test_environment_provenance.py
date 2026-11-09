@@ -222,26 +222,70 @@ class TestRemoteEnvironment:
             != env["host_fingerprint"]
         )
 
-    def test_remote_load_and_runner_unit_feed_the_busy_warning(self):
+    def test_remote_foreign_cpu_and_runner_unit_feed_the_busy_warning(self):
         env = ri.parse_remote_environment(self.OUTPUT)
-        assert env["load_1m"] is None and env["runner_unit"] is None
+        assert env["load_1m"] is None and env["runner_unit"] is None and env["foreign_cpu_cores"] is None
         assert ri.server_host_busy_warning(dict(env, same_host=False)) is None
-        busy = ri.parse_remote_environment(self.OUTPUT + "\nloadavg=11.21 7.28 1.02\nrunner_unit=activating")
-        assert busy["load_1m"] == 11.21 and busy["runner_unit"] == "activating"
-        warning = ri.server_host_busy_warning(dict(busy, same_host=False))
-        assert warning == (
-            "a Conductress runner unit is activating on the server host; 1-minute load average 11.21 > 1.0"
+        # Idle host: nothing but the sampler itself runs.
+        idle = ri.parse_remote_environment(
+            self.OUTPUT + "\nloadavg=0.02 0.05 0.01\nrunner_unit=inactive\nforeign_cpu=0.021\nvalkey_server_procs=0"
+        )
+        assert idle["foreign_cpu_cores"] == 0.021 and idle["valkey_server_procs"] == 0
+        assert ri.server_host_busy_warning(dict(idle, same_host=False)) is None
+        # Carry-over: the load average still holds the previous task's io62 threads,
+        # but nothing foreign runs now. The load average is recorded, never a trigger.
+        carry = ri.parse_remote_environment(
+            self.OUTPUT + "\nloadavg=50.12 31.07 12.40\nrunner_unit=inactive\nforeign_cpu=0.030\nvalkey_server_procs=0"
+        )
+        assert carry["load_1m"] == 50.12
+        assert ri.server_host_busy_warning(dict(carry, same_host=False)) is None
+        # A real foreign consumer, and a crash-looping runner unit, each warn.
+        busy = ri.parse_remote_environment(
+            self.OUTPUT + "\nloadavg=0.90 0.40 0.10\nrunner_unit=activating\nforeign_cpu=1.312\nvalkey_server_procs=0"
+        )
+        assert ri.server_host_busy_warning(dict(busy, same_host=False)) == (
+            "a Conductress runner unit is activating on the server host; "
+            "processes other than valkey-server used 1.31 cores over 2 s (> 0.5)"
+        )
+        assert ri.server_host_busy_warning(dict(idle, same_host=False, foreign_cpu_cores=0.6)) == (
+            "processes other than valkey-server used 0.60 cores over 2 s (> 0.5)"
         )
         # The runner's own host is never judged (its load is the runner itself).
         assert ri.server_host_busy_warning(dict(busy, same_host=True)) is None
-        quiet = ri.parse_remote_environment(self.OUTPUT + "\nloadavg=0.30 0.20 0.10\nrunner_unit=inactive")
-        assert ri.server_host_busy_warning(dict(quiet, same_host=False)) is None
-        assert (
-            ri.server_host_busy_warning(dict(quiet, same_host=False, load_1m=1.5)) == "1-minute load average 1.50 > 1.0"
-        )
-        assert "loadavg=$(cut" in ri.REMOTE_ENVIRONMENT_COMMAND and "systemctl is-active conductress.service" in (
+        assert "foreign_cpu=$(" in ri.REMOTE_ENVIRONMENT_COMMAND and "systemctl is-active conductress.service" in (
             ri.REMOTE_ENVIRONMENT_COMMAND
         )
+
+    @pytest.mark.skipif(not Path("/proc/stat").exists(), reason="needs Linux /proc")
+    def test_host_command_measures_a_real_foreign_process(self):
+        """The shell sample attributes a spinning process to foreign CPU (and not to valkey-server).
+
+        Run the real host command twice: with a process burning one core (the
+        sample must rise by about a core and the warning must fire), and after
+        it is gone (the sample must fall back by about as much). The delta, not
+        an absolute, is asserted, because the test host may itself be busy.
+        """
+        import sys  # pylint: disable=import-outside-toplevel
+
+        def sample() -> dict:
+            out = subprocess.run(
+                ["/bin/sh", "-c", ri.REMOTE_ENVIRONMENT_COMMAND], capture_output=True, text=True, timeout=30
+            )
+            env = ri.parse_remote_environment(out.stdout)
+            env["same_host"] = False
+            assert isinstance(env["foreign_cpu_cores"], float), out.stdout
+            return env
+
+        spinner = subprocess.Popen([sys.executable, "-c", "while True:\n pass"])
+        try:
+            busy = sample()
+        finally:
+            spinner.kill()
+            spinner.wait(timeout=10)
+        quiet = sample()
+        assert busy["foreign_cpu_cores"] - quiet["foreign_cpu_cores"] > 0.5, (busy, quiet)
+        assert ri.server_host_busy_warning(busy) is not None and "cores over 2 s" in ri.server_host_busy_warning(busy)
+        assert quiet["valkey_server_procs"] == 0 and quiet["load_1m"] is not None
 
     def test_remote_packages_line_is_parsed_and_missing_rpm_is_none(self):
         env = ri.parse_remote_environment(self.OUTPUT)
@@ -301,11 +345,18 @@ class TestRemoteEnvironment:
             assert env["same_host"] is False and env["busy_warning"] is None
             # A runner unit crash-looping on the remote server host is recorded in the row's provenance.
             server_cls.return_value.collect_host_environment = AsyncMock(
-                return_value={"boot_id": "9999", "kernel_release": "6.1", "runner_unit": "activating", "load_1m": 7.3}
+                return_value={
+                    "boot_id": "9999",
+                    "kernel_release": "6.1",
+                    "runner_unit": "activating",
+                    "load_1m": 7.3,
+                    "foreign_cpu_cores": 1.3,
+                }
             )
             env = await TaskRunner._server_environment(SimpleNamespace(ip="198.51.100.44", username="operator"))
             assert env["busy_warning"] == (
-                "a Conductress runner unit is activating on the server host; 1-minute load average 7.30 > 1.0"
+                "a Conductress runner unit is activating on the server host; "
+                "processes other than valkey-server used 1.30 cores over 2 s (> 0.5)"
             )
             server_cls.return_value.collect_host_environment = AsyncMock(side_effect=OSError("ssh down"))
             assert (
