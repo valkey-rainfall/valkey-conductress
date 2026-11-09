@@ -8,7 +8,8 @@ Two sources:
 - the published sweep directory, where the runners' publishers put their
   manifests and series files: manual environment events, operator
   explanations, and the paired evidence of each closed series generation
-  (the same commit and workload measured before and after the cut).
+  (the same commit and workload measured before and after the cut), and
+  the runners' confirmation runs (``confirm-<label>.epoch-<epoch>.json``).
 
 Everything here only reads. A missing or unreadable file is skipped with a
 log line; it never stops the analysis.
@@ -24,7 +25,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from .db import ControlDatabase
-from .findings import Explanation, ManualEvent, Observation, PairedSeries, RunnerInput
+from .findings import ConfirmationRun, Explanation, ManualEvent, Observation, PairedSeries, RunnerInput
 from .fleet_registry import FleetRegistry
 
 logger = logging.getLogger(__name__)
@@ -138,6 +139,41 @@ def _paired_for_generation(sweep_dir: Path, label: str, epoch: str, generation: 
     return out
 
 
+CONFIRMATION_SERIES = "confirmation run"
+
+
+def _confirmation_inputs(document: dict[str, Any]) -> tuple[list[PairedSeries], list[ConfirmationRun]]:
+    """Paired evidence (cut = event time) and a summary per run of one confirm file."""
+    paired, runs = [], []
+    for run in document.get("runs") or []:
+        if not isinstance(run, dict):
+            continue
+        event_at = parse_time(run.get("event_at"))
+        if event_at is None:
+            continue
+        done = [
+            p
+            for p in run.get("pairs") or []
+            if isinstance(p, dict)
+            and isinstance(p.get("before"), (int, float))
+            and isinstance(p.get("after"), (int, float))
+            and p["before"] > 0
+            and p["after"] > 0
+        ]
+        if done:
+            paired.append(
+                PairedSeries(
+                    series=CONFIRMATION_SERIES,
+                    cut=event_at,
+                    before=tuple(float(p["before"]) for p in done),
+                    after=tuple(float(p["after"]) for p in done),
+                )
+            )
+        when = parse_time(run.get("ended_at")) or parse_time(run.get("started_at")) or event_at
+        runs.append(ConfirmationRun(when.date().isoformat(), len(done), str(run.get("status") or "")))
+    return paired, runs
+
+
 def load_sweep_inputs(sweep_dir: Optional[Path]) -> dict[str, dict[str, Any]]:
     """Per full platform string: manual events, explanations and paired series from the live manifests."""
     result: dict[str, dict[str, Any]] = {}
@@ -154,7 +190,9 @@ def load_sweep_inputs(sweep_dir: Optional[Path]) -> dict[str, dict[str, Any]]:
         platform = _series_platform(sweep_dir, label, epoch, manifest)
         if platform is None:
             continue
-        entry = result.setdefault(platform, {"manual_events": {}, "explanations": {}, "paired": []})
+        entry = result.setdefault(
+            platform, {"manual_events": {}, "explanations": {}, "paired": [], "confirmation_runs": []}
+        )
         for raw in manifest.get("environment_events") or []:
             at = parse_time(raw.get("at")) if isinstance(raw, dict) else None
             if at is None:
@@ -168,6 +206,11 @@ def load_sweep_inputs(sweep_dir: Optional[Path]) -> dict[str, dict[str, Any]]:
         for generation in manifest.get("generations") or []:
             if isinstance(generation, dict) and generation.get("epoch", epoch) == epoch:
                 entry["paired"].extend(_paired_for_generation(sweep_dir, label, epoch, generation))
+        confirm = _read_json(sweep_dir / f"confirm-{label}.epoch-{epoch}.json")
+        if isinstance(confirm, dict):
+            paired, runs = _confirmation_inputs(confirm)
+            entry["paired"].extend(paired)
+            entry["confirmation_runs"].extend(runs)
     return result
 
 
@@ -194,6 +237,7 @@ def load_runner_inputs(
                 manual_events=list((extra.get("manual_events") or {}).values()),
                 explanations=list((extra.get("explanations") or {}).values()),
                 paired=list(extra.get("paired") or []),
+                confirmation_runs=list(extra.get("confirmation_runs") or []),
             )
         )
     return inputs

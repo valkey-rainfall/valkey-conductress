@@ -178,6 +178,10 @@ class FileProtocol:
             if task_document:
                 data["duration_family"] = task_family(task_document.get("task_type", ""))
                 data["expected_duration_sec"] = estimate_task_duration_seconds(task_document)
+                if task_document.get("confirm_run_id"):
+                    # A confirmation-sweep cell (sweep/confirmation.py): never a series point.
+                    data["sample"] = "confirm"
+                    data["confirm_run_id"] = str(task_document["confirm_run_id"])
             cachecannon_binary = task_document.get("cachecannon_binary") if task_document else None
             data.update(get_result_provenance(cachecannon_binary if isinstance(cachecannon_binary, str) else None))
             if self.server_environment is not None:

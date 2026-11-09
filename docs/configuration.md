@@ -364,6 +364,62 @@ their read-only history next to the live line. The runner service never loads
 archived state. The same event on the data host is handled by
 `conductress-control archive-runner` (see control-service.md).
 
+### Confirmation sweep
+
+After a host change, the confirmation sweep measures a few OLD points of the
+live v3 generation again on the new host and compares new and old values pair
+by pair. It answers "does the new host give the old numbers?" faster than the
+daily canary. It is OFF by default (`CONDUCTRESS_CONFIRM_SWEEP`, table below).
+When it is off, the runner builds nothing for it, queues nothing and publishes
+no confirm file; a request written with the command below waits.
+
+| Environment variable | Default | Meaning |
+| --- | --- | --- |
+| `CONDUCTRESS_CONFIRM_SWEEP` | `false` | Build the confirmation coordinator (needs `CONDUCTRESS_SWEEP_V3_ENABLED`). |
+| `CONDUCTRESS_CONFIRM_FLOOR_PCT` | `0.5` | Smallest effect (percent) a run calls confirmed, and the half-width of the band a cleared run must stay inside. |
+
+A run opens in two ways, at most one open run per runner:
+
+- automatically, the first time the runner records a result row whose host
+  fields differ from the previous row: `kernel_release`, `cpu_microcode`,
+  `glibc_version`, `packages.*`, `cachecannon_commit`, `instance_id`,
+  `host_fingerprint` (and their `server_` twins on a two-host runner). A
+  harness revision change or a reboot alone never opens a run. The event time
+  is the start of the first task on the new host;
+- by an operator, for any event:
+
+```
+conductress sweep confirm --at 2026-11-06T16:14:23Z --label "kernel and glibc update" [--budget 8] [--dry-run]
+```
+
+When no host field changed around `--at` (a harness-only or reboot-only
+event), the command stops and says that the canary page must show a located
+step at the event first; if it does, the operator adds `--canary-step-shown`.
+The label is PUBLIC and passes the same text check as `add-event`.
+
+Pairs: throughput points of the live v3 generation (default engine) measured
+before the event time, with cv <= 1.0%, at least 5 reps, a client that was
+not saturated, and a task that is not excluded. One pair per workload first,
+then release points and the lowest cv; at most 2 per workload. The budget is
+8 tasks by default (6-12). The coordinator is in the last scheduling tier, so
+it queues a cell only when no nightly, landmark, bisection or backfill task
+of any series is due. After each task it tests the pairs done (median log
+ratio, bootstrap CI, as in the canary findings) and stops: `confirmed` (at
+least 3 pairs, the 95% CI excludes 0 and `|effect| >=` floor), `cleared` (at
+least 5 pairs, the CI inside +/- floor), or at the budget with
+`insufficient-data`; `no-pairs` when no old point passes the rules. It never
+bisects, never adds a point to a series and never moves a generation: its
+cells carry no `sweep_commit` and the note `[confirm-v3:<source>/<series>]`,
+and their result rows carry `sample: "confirm"` and `confirm_run_id`.
+
+Files: `sweep_data/confirm_runs.json` (runner state, private) and, published,
+`confirm-<platform>.epoch-v3.json` with one entry per run: `run_id,
+event_at, label, trigger, budget, status, floor_pct, pairs_done, effect_pct,
+ci_pct, started_at, ended_at` and `pairs` (`workload, metric, commit, before,
+after`). No task ids, harness revisions or host identity are published. The
+canary findings read this file as paired evidence (see "Findings" in
+`docs/canary-drift-analysis.md`).
+
 ### Memory series: settled sample, deferred backfill
 
 The memory series sample each cell **settled**: after the populate, the memory

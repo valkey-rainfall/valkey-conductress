@@ -174,6 +174,30 @@ SWEEP_V3_ENABLED = _env_bool("CONDUCTRESS_SWEEP_V3_ENABLED", False)
 SWEEP_V3_EPOCH_ID = "v3"
 
 
+def _env_positive_float(name: str, default: float) -> float:
+    """Read a positive number from the environment; a bad value fails startup."""
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be a number; got {raw!r}") from exc
+    if not value > 0:
+        raise ValueError(f"{name} must be greater than 0; got {raw!r}")
+    return value
+
+
+# Confirmation sweep (sweep/confirmation.py): after a host change, re-measure a
+# few old (commit, workload) points of the live v3 generation at the lowest
+# priority. OFF by default: when off, the runner builds no confirmation
+# coordinator, queues no confirmation task and publishes no confirm file.
+CONFIRM_SWEEP = _env_bool("CONDUCTRESS_CONFIRM_SWEEP", False)
+# The smallest effect (percent) a confirmation run calls confirmed, and the
+# half-width of the band a cleared run's interval must stay inside.
+CONFIRM_FLOOR_PCT = _env_positive_float("CONDUCTRESS_CONFIRM_FLOOR_PCT", 0.5)
+
+
 def _env_epoch_list(name: str, default: tuple[str, ...]) -> tuple[str, ...]:
     """Read a comma-separated epoch precedence list from the environment.
 
