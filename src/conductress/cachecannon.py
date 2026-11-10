@@ -333,7 +333,11 @@ def generate_toml_config(
     else:  # 'get' (default)
         get_weight, set_weight = 100, 0
     commands_section = f"get = {get_weight}\nset = {set_weight}\ndelete = 0"
-    workload_section = f"prefill = {'true' if prefill else 'false'}"
+    # cachecannon >= 0.0.21 adds workload.prefill_settle (default 60s) to the
+    # warmup after a prefill, to let a disk-backed server's page-cache writeback
+    # burst pass before the scored window. Valkey is memory-only, so the burst
+    # does not exist; "0s" keeps every rep's timing as it was before 0.0.21.
+    workload_section = f"prefill = {'true' if prefill else 'false'}\nprefill_settle = \"0s\""
     if rate_limit > 0:
         workload_section += f"\nrate_limit = {rate_limit}"
 
