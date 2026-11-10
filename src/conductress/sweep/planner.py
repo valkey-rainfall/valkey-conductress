@@ -196,6 +196,11 @@ class SweepTask:
     priority: TaskPriority
     reason: str  # human-readable explanation
     pr: Optional[int] = None
+    # How much work the task resolves, comparable across series within one
+    # priority: the relative delta of the segment a BISECTION halves, the
+    # unsampled commit count a BACKFILL fills. Zero for NIGHTLY and LANDMARK,
+    # which the runner orders round-robin instead.
+    magnitude: float = 0.0
 
 
 @dataclass
@@ -537,6 +542,7 @@ class SweepPlanner:
             priority=TaskPriority.BISECTION,
             reason=f"Bisecting {abs(segment.delta)*100:.1f}% {direction} "
             f"between {segment.left_commit[:8]} and {segment.right_commit[:8]}",
+            magnitude=segment.abs_delta,
         )
 
     def _check_landmarks(self) -> Optional[SweepTask]:
@@ -608,6 +614,7 @@ class SweepPlanner:
             date=self.state.commit_dates.get(midpoint, ""),
             priority=TaskPriority.BACKFILL,
             reason=f"Backfill: {largest_gap} commits in gap",
+            magnitude=float(largest_gap),
         )
 
     def _skeleton_task(self) -> Optional[SweepTask]:
@@ -628,6 +635,7 @@ class SweepPlanner:
                     date=self.state.commit_dates.get(commit, ""),
                     priority=TaskPriority.BACKFILL,
                     reason="Skeleton pass",
+                    magnitude=float(total),  # the whole history is still unsampled
                 )
 
         # Also check the last commit
@@ -638,6 +646,7 @@ class SweepPlanner:
                 date=self.state.commit_dates.get(last, ""),
                 priority=TaskPriority.BACKFILL,
                 reason="Skeleton pass (last commit)",
+                magnitude=float(total),
             )
 
         return None

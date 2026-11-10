@@ -115,60 +115,6 @@ class MemorySweepCoordinator(BaseSweepCoordinator):
         prefix = f"{self.engine.source}-" if self.engine and self.engine.source != "valkey" else ""
         return f"memory-{prefix}{self._workload.label}"
 
-    def get_urgency_score(self) -> float:
-        """Memory urgency with flatness discount.
-
-        Memory overhead is deterministic — once change-points are found,
-        backfilling flat plateaus adds no information. Discount urgency
-        when most adjacent-point pairs show <2% delta.
-        """
-        import math
-
-        base = super().get_urgency_score()
-        if base in (0.0, float("inf")):
-            return base
-
-        # Need enough points to assess flatness
-        completed = sum(1 for p in self.state.points.values() if p.value is not None)
-        if completed < 5:
-            return base
-
-        # Compute flatness from all adjacent completed points
-        ordered = sorted(
-            (
-                (self.state.merge_commits.index(c), p.value)
-                for c, p in self.state.points.items()
-                if p.value is not None and c in set(self.state.merge_commits)
-            ),
-            key=lambda x: x[0],
-        )
-        if len(ordered) < 2:
-            return base
-
-        flat_threshold = 0.01
-        flat_count = 0
-        total_pairs = len(ordered) - 1
-        for i in range(total_pairs):
-            left_val = ordered[i][1]
-            right_val = ordered[i + 1][1]
-            if left_val == 0:
-                continue
-            delta = abs(right_val - left_val) / left_val
-            if delta < flat_threshold:
-                flat_count += 1
-
-        flatness = flat_count / total_pairs if total_pairs > 0 else 0
-
-        # Discount: if 80%+ of pairs are flat, reduce urgency by 5x
-        if flatness > 0.8:
-            discount = 0.2
-        elif flatness > 0.5:
-            discount = 0.5
-        else:
-            discount = 1.0
-
-        return base * discount
-
     def export(self, output_path: Path, platform: str) -> int:
         """Override to pass num_keys for export-time re-categorization."""
         from conductress.config import engine_repo_slug, should_profile_internals

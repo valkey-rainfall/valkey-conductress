@@ -10,6 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional, Protocol
 
+from conductress.sweep.planner import TaskPriority
 from conductress.sweep_config import load_sweep_config
 from conductress.task_queue import BaseTaskRunner
 
@@ -33,6 +34,10 @@ from .status_export import build_status, export_status
 from .task_queue import BaseTaskData, TaskQueue
 
 logger = logging.getLogger(__name__)
+
+# Sort key of a subscriber with nothing planned (or no planner at all): below
+# every real task, including the confirmation sweep's CONFIRM cells.
+_NO_TASK_KEY = (TaskPriority.CONFIRM.value + 1, 0.0, 0.0)
 
 
 def required_server_count(task_data: BaseTaskData) -> int:
@@ -411,11 +416,16 @@ class TaskRunner:
     def _schedule_next(self) -> None:
         """Pick the highest-priority coordinator and let it queue a task.
 
-        Called after every task completion/failure. Each coordinator proposes
-        its next task via urgency scoring. NIGHTLY (untested HEAD) gets
-        absolute priority over all urgency scores; below that, a coordinator's
-        ``schedule_tier`` groups candidates before urgency orders them, so a
-        deferred series (memory backfill) waits for every normal series.
+        Called after every task completion/failure. NIGHTLY (untested HEAD)
+        gets absolute priority in epoch-precedence order. Below that, every
+        coordinator is sorted by ``(schedule_tier, schedule_key)``: the tier
+        first, so a deferred series (memory backfill) waits for every normal
+        series; then the key ``(priority, -magnitude, last_scheduled_at)``,
+        which is the planner's own TaskPriority of the series' next task, so a
+        LANDMARK in any series runs before a BISECTION in any other, then the
+        larger task within one priority (bisected delta, backfilled span), then
+        the series that queued least recently. Epoch precedence breaks a full
+        tie, because the sort is stable over the epoch-ordered list.
         """
         if not self._subscribers:
             return
@@ -436,25 +446,35 @@ class TaskRunner:
                 if queue.get_all_tasks():
                     return
 
-        # Score each subscriber that supports urgency scoring
+        # Rank each subscriber by (tier, schedule_key).  Subscribers are
+        # duck-typed: an absent tier is normal (0); an absent key, or a planner
+        # with nothing to queue, is asked last.
         candidates = []
         for sub in ordered:
             wid = getattr(sub, "workload_id", None)
             if wid and not config.is_allowed(wid, getattr(sub, "epoch_id", "v1")):
                 continue
-            score = getattr(sub, "get_urgency_score", lambda: 0.0)()
             tier = getattr(sub, "schedule_tier", lambda: 0)()
-            if not isinstance(tier, int):  # subscribers are duck-typed; an absent tier is normal
+            if not isinstance(tier, int):
                 tier = 0
-            candidates.append((tier, score, sub))
-        # Tier first, then urgency (highest first), and let the winner queue.  A
-        # deferred series (tier 1: a memory series whose next task is gap-filling
-        # backfill) queues only once every tier-0 series has nothing to queue.
-        # The sort is stable over an epoch-ordered list, so equal tier and
-        # urgency break toward the higher-precedence epoch instead of
-        # registration order.
-        candidates.sort(key=lambda x: (x[0], -x[1]))
-        for _tier, _score, sub in candidates:
+            key = getattr(sub, "schedule_key", lambda: None)()
+            if not isinstance(key, tuple):
+                key = _NO_TASK_KEY
+            candidates.append((tier, key, sub))
+        # Tier first, then the key, and let the winner queue.  A deferred series
+        # (tier 1: a memory series whose next task is gap-filling backfill)
+        # queues only once every tier-0 series has nothing to queue.  The sort
+        # is stable over an epoch-ordered list, so a full tie breaks toward the
+        # higher-precedence epoch instead of registration order.
+        candidates.sort(key=lambda x: (x[0], x[1]))
+        logger.info(
+            "[sweep] schedule order: %s",
+            " ".join(
+                f"{getattr(sub, 'workload_id', type(sub).__name__)}(t{tier},p{key[0]},m{abs(key[1]):.3g})"
+                for tier, key, sub in candidates
+            ),
+        )
+        for _tier, _key, sub in candidates:
             sub.on_queue_empty()
             queue = TaskQueue()
             if queue.get_all_tasks():

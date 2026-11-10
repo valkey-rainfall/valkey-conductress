@@ -32,7 +32,7 @@ from conductress.config import (
     SWEEP_V3_LATENCY_REPETITIONS,
     SWEEP_V3_LATENCY_TARGET_CV,
 )
-from conductress.sweep.planner import SweepTask
+from conductress.sweep.planner import SweepPlanner, SweepTask, TaskPriority
 from conductress.tasks.task_cachecannon import SCORE_METRICS, CachecannonTaskData, score_from_parsed
 from conductress.topology import TopologySpec
 
@@ -403,15 +403,14 @@ class TestLatencySweepCoordinatorV3:
         assert point["p99_us"] == 410.0 and point["p99_9_us"] == 900.0
         assert "histogram" not in point, "cachecannon emits no histogram; the key is omitted, not null"
 
-    def test_urgency_yields_to_throughput_once_established(self, tmp_path):
+    def test_schedule_key_follows_the_planner(self, tmp_path):
         coord = _v3_latency(tmp_path)
-        assert coord.get_urgency_score() == float("inf"), "a new series is top priority"
-        with patch("conductress.sweep.coordinator.BaseSweepCoordinator.get_urgency_score", return_value=4.0):
-            for i in range(2):
-                c = f"{i:040x}"
-                coord.state.commit_dates[c] = "2026-01-01"
-                coord.planner.record_result(c, 400.0 + i, 1.0, 3)
-            assert coord.get_urgency_score() == 2.0
+        assert coord.schedule_key() is None, "no commits enumerated yet: nothing to queue"
+        commits = [f"{i:040x}" for i in range(3)]
+        coord.state.merge_commits = commits
+        coord.state.commit_dates.update({c: "2026-01-01" for c in commits})
+        coord.planner = SweepPlanner(coord.state)
+        assert coord.schedule_key() == (TaskPriority.BACKFILL.value, -3.0, 0.0), "skeleton pass over 3 commits"
 
 
 # ---------------------------------------------------------------------------
@@ -556,7 +555,7 @@ class TestRetiredSeries:
         live = MagicMock(epoch_id="v3", workload_id="get-k16-v16-t7-p10", retired=False)
         for sub in (retired, live):
             sub.has_nightly_task.return_value = False
-            sub.get_urgency_score.return_value = 5.0
+            sub.schedule_key.return_value = (TaskPriority.BACKFILL.value, -5.0, 0.0)
         runner._subscribers = [retired, live]
         with (
             patch("conductress.task_runner.TaskQueue") as queue_cls,
@@ -568,7 +567,7 @@ class TestRetiredSeries:
         live.on_queue_empty.assert_called_once()
         retired.on_queue_empty.assert_not_called()
         retired.has_nightly_task.assert_not_called()
-        retired.get_urgency_score.assert_not_called()
+        retired.schedule_key.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

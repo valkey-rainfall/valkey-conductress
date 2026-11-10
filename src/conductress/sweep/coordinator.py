@@ -352,55 +352,46 @@ class BaseSweepCoordinator(ABC):
         task = self._create_task(sweep_task)
         task.sweep_commit = sweep_task.commit  # type: ignore[attr-defined]
         queue.submit_task(task)
+        self.last_scheduled_at = time.monotonic()
         logger.info(
             f"[sweep] Queued: {self._sweep_source}/{self.workload_id} {sweep_task.commit[:8]} - {sweep_task.reason}"
         )
         return True
 
-    def get_urgency_score(self) -> float:
-        """Return priority score based on expected information gain.
+    # Monotonic time this series last queued a task; 0.0 until it has. The
+    # runner's round-robin within one priority reads it: least recent first.
+    last_scheduled_at: float = 0.0
 
-        Higher score = more information to be gained from running this sweeper next.
-        Score is gap_magnitude_pct * log2(gap_width), so a new series with no data
-        gets infinity (top priority), and a well-covered series with small deltas
-        gets a low score.
+    def schedule_key(self) -> Optional[tuple[int, float, float]]:
+        """Rank of this series' next task against every other series' next task.
+
+        ``(priority, -magnitude, last_scheduled_at)``, read by the runner below
+        ``schedule_tier``. The planner's own TaskPriority comes first, so the
+        same values that order one series' points also order the series against
+        each other: a release landmark anywhere runs before a bisection
+        anywhere. Within one priority the larger task runs first (the bisected
+        delta, the backfilled commit span), and among equal tasks the series
+        that queued least recently. None when the planner has nothing to queue.
         """
-        import math
-
-        # Brand new series with <2 points = top priority
-        completed = sum(1 for p in self.state.points.values() if p.value is not None)
-        if completed < 2:
-            return float("inf")
-
-        # Check what the planner would do next
         task = self.planner.get_next_task(current_head=None)
         if task is None:
-            return 0.0
-
-        # For bisection tasks, score based on the largest unresolved segment
-        segments = self.planner.get_unresolved_segments()
-        if segments:
-            best = max(segments, key=lambda s: s.abs_delta * s.commit_count)
-            return best.abs_delta * 100 * math.log2(max(best.commit_count, 2))
-
-        # For backfill/landmark tasks, use gap width only (no magnitude known yet)
-        # Lower priority than bisection but still useful
-        return math.log2(max(len(self.state.merge_commits) // max(completed, 1), 2))
+            return None
+        return (task.priority.value, -task.magnitude, self.last_scheduled_at)
 
     # Whether this series' gap-filling backfill yields to every other series'
     # pending work.  A subclass sets it for a metric whose flat regions carry no
     # information anyone is waiting for (memory: deterministic, rarely moves).
     # Only BACKFILL planner tasks are deferred; nightly HEAD, release landmarks
-    # and bisection compete on urgency like any other series.
+    # and bisection rank by ``schedule_key`` like any other series.
     defer_backfill: bool = False
 
     def schedule_tier(self) -> int:
-        """Scheduling tier for the runner's urgency sort: 0 normal, 1 deferred.
+        """Scheduling tier for the runner's sort: 0 normal, 1 deferred.
 
-        The runner sorts candidates by tier first and urgency second, so a
-        tier-1 series queues only when no tier-0 series has a task to queue.
-        A series lands in tier 1 when it defers backfill and the planner's next
-        task is BACKFILL.
+        The runner sorts candidates by tier first and ``schedule_key`` second,
+        so a tier-1 series queues only when no tier-0 series has a task to
+        queue. A series lands in tier 1 when it defers backfill and the
+        planner's next task is BACKFILL.
         """
         if not self.defer_backfill:
             return 0

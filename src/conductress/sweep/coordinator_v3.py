@@ -542,17 +542,6 @@ class CachecannonLatencySweepCoordinatorV3(BaseCachecannonSweepCoordinatorV3):
             engine=engine,
         )
 
-    def get_urgency_score(self) -> float:
-        """Priority score, dampened by 0.5x relative to throughput.
-
-        Latency fills in behind the throughput series once both exist, the same
-        weighting the latency series has always had.
-        """
-        completed = sum(1 for p in self.state.points.values() if p.value is not None)
-        if completed < 2:
-            return float("inf")
-        return super().get_urgency_score() * 0.5
-
     @staticmethod
     def latency_data_from_entry(entry: dict) -> Optional[dict]:
         """The per-point latency detail the exporter publishes, from one result record.
