@@ -64,6 +64,7 @@ def test_toml_generation_basic():
     assert "connections = 1200" in toml
     assert "pipeline_depth = 10" in toml
     assert "prefill = true" in toml
+    assert 'prefill_settle = "0s"' in toml
     assert "count = 3000000" in toml
     assert "length = 16" in toml
     assert 'distribution = "uniform"' in toml

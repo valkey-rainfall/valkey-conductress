@@ -286,7 +286,10 @@ SWEEP_EPOCH_PRECEDENCE = _resolve_epoch_precedence(_env_epoch_list("CONDUCTRESS_
 #
 # Changing any of these values defines a NEW workload identity, not a
 # continuation of the series.  See conductress-cachecannon-v3/epoch-specification.md.
-SWEEP_V3_CACHECANNON_COMMIT = "31a2befaa8bf7b3b7a7f7e03e2a847a2e407a3ce"
+# cachecannon v0.0.34 (tag v0.0.34, 2026-10-28). Bumped from 31a2befa (0.0.19+,
+# 2026-07-22) for the private-CA TLS client (tls_ca_file, cachecannon #123);
+# measured neutral on the closed-loop GET/SET p10 cells before the bump.
+SWEEP_V3_CACHECANNON_COMMIT = "1bea936b81026c1cc04c86dcb9cc251f58e430a1"
 SWEEP_V3_WARMUP = 10
 SWEEP_V3_DURATION = 30
 SWEEP_V3_CONNECTIONS = 400
