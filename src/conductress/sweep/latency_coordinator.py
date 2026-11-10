@@ -38,9 +38,9 @@ class LatencySweepCoordinator(BaseSweepCoordinator):
     def workload_id(self) -> str:  # type: ignore[override]
         return "get-k16-v16"
 
-    def get_urgency_score(self) -> float:
+    def schedule_key(self) -> None:
         """A retired series has nothing left to measure."""
-        return 0.0
+        return None
 
     def _create_task(self, sweep_task: SweepTask) -> BaseTaskData:
         raise RuntimeError(f"{self.metric_id}:{self.workload_id} is retired and does not schedule tasks")

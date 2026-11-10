@@ -1,11 +1,21 @@
-"""Tests for score-based scheduling in TaskRunner._schedule_next."""
+"""Tests for cross-series scheduling in TaskRunner._schedule_next.
+
+The runner ranks every series' next task by (schedule_tier, schedule_key) where
+schedule_key is (priority, -magnitude, last_scheduled_at): the planner's own
+TaskPriority first, so a LANDMARK in any series runs before a BISECTION in any
+other; then the larger task; then the series that queued least recently.
+"""
 
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from conductress.sweep.planner import BenchmarkPoint, SweepPlanner, SweepState
+from conductress.sweep.planner import BenchmarkPoint, Landmark, PointStatus, SweepPlanner, SweepState, TaskPriority
 from conductress.task_runner import TaskRunner
+
+LANDMARK = TaskPriority.LANDMARK.value
+BISECTION = TaskPriority.BISECTION.value
+BACKFILL = TaskPriority.BACKFILL.value
 
 
 @pytest.fixture
@@ -23,57 +33,89 @@ def mock_config():
         yield config
 
 
-def _make_subscriber(workload_id="get-k16-v16-t7-p10", urgency=1.0, has_nightly=False, queues_task=True, tier=0):
-    """Create a mock subscriber with configurable behavior."""
+def _make_subscriber(workload_id="get-k16-v16-t7-p10", key=(BISECTION, -0.05, 0.0), has_nightly=False, tier=0):
+    """Create a mock subscriber with configurable scheduling answers."""
     sub = MagicMock()
     sub.workload_id = workload_id
-    sub.get_urgency_score = MagicMock(return_value=urgency)
+    sub.schedule_key = MagicMock(return_value=key)
     sub.has_nightly_task = MagicMock(return_value=has_nightly)
     sub.schedule_tier = MagicMock(return_value=tier)
-
-    def on_queue_empty():
-        if queues_task:
-            # Simulate queuing a task by making TaskQueue.get_all_tasks return something
-            pass
-
-    sub.on_queue_empty = MagicMock(side_effect=on_queue_empty)
+    sub.on_queue_empty = MagicMock()
     return sub
 
 
+def _run(runner, queued_by):
+    """Drive _schedule_next; ``queued_by`` names the subscribers whose on_queue_empty queues a task."""
+    state = {"queued": False}
+
+    def make_side_effect(sub):
+        def on_queue_empty():
+            if sub in queued_by:
+                state["queued"] = True
+
+        return on_queue_empty
+
+    for sub in runner._subscribers:
+        sub.on_queue_empty = MagicMock(side_effect=make_side_effect(sub))
+    with patch("conductress.task_runner.TaskQueue") as MockQueue:
+        queue = MagicMock()
+        queue.get_all_tasks.side_effect = lambda: [MagicMock()] if state["queued"] else []
+        MockQueue.return_value = queue
+        runner._schedule_next()
+
+
 class TestScheduleNext:
-    """Tests for _schedule_next score-based scheduling."""
+    """Global order across series, driven by mock subscribers."""
 
-    def test_highest_urgency_wins(self, runner, mock_config):
-        """The coordinator with highest urgency score gets to queue."""
-        low = _make_subscriber("memory-set-k16-v64", urgency=2.0)
-        high = _make_subscriber("get-k16-v16-t7-p10", urgency=10.0)
-        runner._subscribers = [low, high]
+    def test_landmark_anywhere_beats_bisection_anywhere(self, runner, mock_config):
+        """A pending release landmark in A runs before a 6% bisection in B."""
+        bisect = _make_subscriber("mixed-s20-k16-v16-t7-p10", key=(BISECTION, -0.06, 0.0))
+        landmark = _make_subscriber("set-k16-v16-t7-p10", key=(LANDMARK, 0.0, 0.0))
+        runner._subscribers = [bisect, landmark]
 
-        # Make TaskQueue return tasks after on_queue_empty is called
-        call_count = [0]
+        _run(runner, queued_by={landmark, bisect})
 
-        def queue_side_effect():
-            call_count[0] += 1
-            # First call after high's on_queue_empty returns a task
-            if call_count[0] >= 1:
-                return [MagicMock()]
-            return []
+        landmark.on_queue_empty.assert_called_once()
+        bisect.on_queue_empty.assert_not_called()
 
-        with patch("conductress.task_runner.TaskQueue") as MockQueue:
-            queue = MagicMock()
-            queue.get_all_tasks.side_effect = queue_side_effect
-            MockQueue.return_value = queue
-            runner._schedule_next()
+    def test_bisection_larger_delta_first(self, runner, mock_config):
+        """Within BISECTION a 10% step beats a 3% step."""
+        small = _make_subscriber("get-k16-v16-t7-p1", key=(BISECTION, -0.03, 0.0))
+        large = _make_subscriber("mixed-s20-k16-v16-t7-p10", key=(BISECTION, -0.10, 0.0))
+        runner._subscribers = [small, large]
 
-        # High urgency called first
-        high.on_queue_empty.assert_called_once()
-        low.on_queue_empty.assert_not_called()
+        _run(runner, queued_by={small, large})
 
-    def test_nightly_preempts_urgency(self, runner, mock_config):
-        """NIGHTLY coordinator wins regardless of urgency score."""
-        high_urgency = _make_subscriber("get-k16-v16-t7-p10", urgency=100.0, has_nightly=False)
-        nightly = _make_subscriber("memory-redis-set-k16-v64", urgency=0.1, has_nightly=True)
-        runner._subscribers = [high_urgency, nightly]
+        large.on_queue_empty.assert_called_once()
+        small.on_queue_empty.assert_not_called()
+
+    def test_backfill_larger_gap_first(self, runner, mock_config):
+        """Within BACKFILL the larger unsampled commit span wins."""
+        narrow = _make_subscriber("get-k16-v16-t7-p1", key=(BACKFILL, -40.0, 0.0))
+        wide = _make_subscriber("get-k16-v1024-t7-p10", key=(BACKFILL, -411.0, 0.0))
+        runner._subscribers = [narrow, wide]
+
+        _run(runner, queued_by={narrow, wide})
+
+        wide.on_queue_empty.assert_called_once()
+        narrow.on_queue_empty.assert_not_called()
+
+    def test_landmarks_rotate_least_recent_first(self, runner, mock_config):
+        """Equal landmarks: the series that queued least recently goes first."""
+        recent = _make_subscriber("set-k16-v16-t7-p10", key=(LANDMARK, 0.0, 500.0))
+        stale = _make_subscriber("get-k16-v16-t7-p1-r100k", key=(LANDMARK, 0.0, 100.0))
+        runner._subscribers = [recent, stale]
+
+        _run(runner, queued_by={recent, stale})
+
+        stale.on_queue_empty.assert_called_once()
+        recent.on_queue_empty.assert_not_called()
+
+    def test_nightly_preempts_landmark(self, runner, mock_config):
+        """NIGHTLY (untested HEAD) wins over a landmark elsewhere."""
+        landmark = _make_subscriber("get-k16-v16-t7-p10", key=(LANDMARK, 0.0, 0.0), has_nightly=False)
+        nightly = _make_subscriber("memory-redis-set-k16-v64", key=(BACKFILL, -1.0, 0.0), has_nightly=True)
+        runner._subscribers = [landmark, nightly]
 
         with patch("conductress.task_runner.TaskQueue") as MockQueue:
             queue = MagicMock()
@@ -81,20 +123,27 @@ class TestScheduleNext:
             MockQueue.return_value = queue
             runner._schedule_next()
 
-        # Nightly wins despite lower urgency
         nightly.on_queue_empty.assert_called_once()
-        high_urgency.on_queue_empty.assert_not_called()
+        landmark.on_queue_empty.assert_not_called()
+
+    def test_series_with_nothing_planned_is_asked_last(self, runner, mock_config):
+        """A None key (planner has nothing) sorts below every real task."""
+        idle = _make_subscriber("get-k16-v16-t7-p10-tls", key=None)
+        backfill = _make_subscriber("get-k16-v16-t7-p1", key=(BACKFILL, -3.0, 0.0))
+        runner._subscribers = [idle, backfill]
+
+        _run(runner, queued_by={backfill})
+
+        backfill.on_queue_empty.assert_called_once()
+        idle.on_queue_empty.assert_not_called()
 
     def test_disallowed_workload_skipped(self, runner):
         """Coordinators for disallowed workloads are not scheduled."""
-        blocked = _make_subscriber("get-k16-v16-t7-p10", urgency=100.0)
-        allowed = _make_subscriber("memory-set-k16-v64", urgency=1.0)
+        blocked = _make_subscriber("get-k16-v16-t7-p10", key=(LANDMARK, 0.0, 0.0))
+        allowed = _make_subscriber("memory-set-k16-v64", key=(BACKFILL, -1.0, 0.0))
 
         config = MagicMock()
-        # is_allowed now takes (workload_id, epoch_id); epoch defaults so pre-epoch
-        # callers keep working, but a stub must accept the second argument.
         config.is_allowed.side_effect = lambda wid, epoch="v1": wid != "get-k16-v16-t7-p10"
-
         runner._subscribers = [blocked, allowed]
 
         with (
@@ -109,58 +158,10 @@ class TestScheduleNext:
         blocked.on_queue_empty.assert_not_called()
         allowed.on_queue_empty.assert_called_once()
 
-    def test_no_self_feeding_after_completion(self, runner, mock_config):
-        """on_task_completed does NOT queue the next task from the same coordinator.
-
-        This is the key behavioral test: after a throughput bisection completes,
-        the next task should be chosen by _schedule_next (score-based), not by
-        the completing coordinator self-feeding.
-        """
-        from conductress.sweep.coordinator import BaseSweepCoordinator
-        from conductress.sweep.planner import BenchmarkPoint, SweepPlanner, SweepState
-
-        # Create a minimal coordinator that would have work to do
-        state = SweepState(
-            merge_commits=["aaa", "bbb", "ccc"],
-            commit_dates={"aaa": "2024-01-01", "bbb": "2024-02-01", "ccc": "2024-03-01"},
-        )
-        state.points["aaa"] = BenchmarkPoint(commit="aaa", date="2024-01-01", value=1000.0, cv=0.5, reps=3)
-
-        # Create a mock task that looks like it belongs to a sweep coordinator
-        task = MagicMock()
-        task.source = "valkey"
-        task.specifier = "bbb"
-        task.sweep_commit = "bbb"
-        task.type = "get"
-        task.val_sizes = [16]
-        task.note = "[perf-sweep:valkey/get-k16-v16-t7-p10] Bisecting"
-
-        with patch("conductress.task_runner.TaskQueue") as MockQueue:
-            queue = MagicMock()
-            queue.get_all_tasks.return_value = []
-            queue.submit_task = MagicMock()
-            MockQueue.return_value = queue
-
-            # Simulate what on_task_completed does for a sweep subscriber
-            # The key assertion: it should NOT call queue.submit_task
-            sub = MagicMock()
-            sub.on_task_completed = MagicMock()
-            runner._subscribers = [sub]
-
-            # After on_task_completed, the queue should still be empty
-            # (no self-feeding). Only _schedule_next should queue.
-            for s in runner._subscribers:
-                s.on_task_completed(task)
-
-            # The subscriber's on_task_completed was called but it doesn't queue
-            sub.on_task_completed.assert_called_once_with(task)
-            # No task was directly submitted to queue by the subscriber
-            queue.submit_task.assert_not_called()
-
     def test_multiple_nightly_first_one_wins(self, runner, mock_config):
         """When multiple coordinators have NIGHTLY, the first one encountered wins."""
-        nightly1 = _make_subscriber("memory-redis-set-k16-v64", urgency=0.1, has_nightly=True)
-        nightly2 = _make_subscriber("memory-redis-zadd-m20", urgency=0.1, has_nightly=True)
+        nightly1 = _make_subscriber("memory-redis-set-k16-v64", has_nightly=True)
+        nightly2 = _make_subscriber("memory-redis-zadd-m20", has_nightly=True)
         runner._subscribers = [nightly1, nightly2]
 
         with patch("conductress.task_runner.TaskQueue") as MockQueue:
@@ -174,195 +175,154 @@ class TestScheduleNext:
 
     def test_falls_through_when_no_tasks_available(self, runner, mock_config):
         """If no coordinator can produce a task, _schedule_next returns cleanly."""
-        sub = _make_subscriber("get-k16-v16-t7-p10", urgency=5.0)
+        sub = _make_subscriber("get-k16-v16-t7-p10")
         runner._subscribers = [sub]
 
-        with patch("conductress.task_runner.TaskQueue") as MockQueue:
-            queue = MagicMock()
-            queue.get_all_tasks.return_value = []  # Nothing queued
-            MockQueue.return_value = queue
-            runner._schedule_next()  # Should not raise
+        _run(runner, queued_by=set())
 
         sub.on_queue_empty.assert_called_once()
+
+    def test_decision_is_logged(self, runner, mock_config, caplog):
+        """Every decision logs the sorted order with tier, priority and magnitude."""
+        bisect = _make_subscriber("mixed-s20-k16-v16-t7-p10", key=(BISECTION, -0.06, 0.0))
+        landmark = _make_subscriber("set-k16-v16-t7-p10", key=(LANDMARK, 0.0, 0.0))
+        runner._subscribers = [bisect, landmark]
+
+        with caplog.at_level("INFO", logger="conductress.task_runner"):
+            _run(runner, queued_by={landmark})
+
+        line = next(r.getMessage() for r in caplog.records if "schedule order" in r.getMessage())
+        assert line.index("set-k16-v16-t7-p10(t0,p2,m0)") < line.index("mixed-s20-k16-v16-t7-p10(t0,p3,m0.06)")
 
 
 class TestScheduleTier:
     """A tier-1 (deferred) series queues only after every tier-0 series has nothing to queue."""
 
-    @staticmethod
-    def _run(runner, queued_by):
-        """Drive _schedule_next; ``queued_by`` names the subscribers whose on_queue_empty queues a task."""
-        state = {"queued": False}
-
-        def make_side_effect(sub):
-            def on_queue_empty():
-                if sub in queued_by:
-                    state["queued"] = True
-
-            return on_queue_empty
-
-        for sub in runner._subscribers:
-            sub.on_queue_empty = MagicMock(side_effect=make_side_effect(sub))
-        with patch("conductress.task_runner.TaskQueue") as MockQueue:
-            queue = MagicMock()
-            queue.get_all_tasks.side_effect = lambda: [MagicMock()] if state["queued"] else []
-            MockQueue.return_value = queue
-            runner._schedule_next()
-
-    def test_deferred_series_yields_to_lower_urgency_normal_series(self, runner, mock_config):
-        perf = _make_subscriber("get-k16-v16-t7-p10", urgency=0.5, tier=0)
-        memory = _make_subscriber("memory-sadd-m20", urgency=float("inf"), tier=1)
+    def test_deferred_memory_backfill_waits_for_any_normal_series(self, runner, mock_config):
+        perf = _make_subscriber("get-k16-v16-t7-p10", key=(BACKFILL, -3.0, 0.0), tier=0)
+        memory = _make_subscriber("memory-sadd-m20", key=(LANDMARK, 0.0, 0.0), tier=1)
         runner._subscribers = [memory, perf]
 
-        self._run(runner, queued_by={perf})
+        _run(runner, queued_by={perf})
 
         perf.on_queue_empty.assert_called_once()
         memory.on_queue_empty.assert_not_called()
 
     def test_deferred_series_runs_when_normal_series_have_nothing(self, runner, mock_config):
-        perf = _make_subscriber("get-k16-v16-t7-p10", urgency=0.0, tier=0)
-        memory = _make_subscriber("memory-sadd-m20", urgency=2.0, tier=1)
+        perf = _make_subscriber("get-k16-v16-t7-p10", key=None, tier=0)
+        memory = _make_subscriber("memory-sadd-m20", key=(BACKFILL, -800.0, 0.0), tier=1)
         runner._subscribers = [memory, perf]
 
-        self._run(runner, queued_by={memory})
+        _run(runner, queued_by={memory})
 
         # perf was asked first (tier 0) and queued nothing; memory then ran.
         perf.on_queue_empty.assert_called_once()
         memory.on_queue_empty.assert_called_once()
 
-    def test_tier_zero_memory_task_competes_on_urgency(self, runner, mock_config):
-        """A memory bisection (tier 0) still outranks a lower-urgency throughput series."""
-        perf = _make_subscriber("get-k16-v16-t7-p10", urgency=1.0, tier=0)
-        memory = _make_subscriber("memory-sadd-m20", urgency=50.0, tier=0)
+    def test_tier_zero_memory_bisection_competes_by_priority(self, runner, mock_config):
+        """A memory bisection (tier 0) still outranks a throughput backfill."""
+        perf = _make_subscriber("get-k16-v16-t7-p10", key=(BACKFILL, -411.0, 0.0), tier=0)
+        memory = _make_subscriber("memory-sadd-m20", key=(BISECTION, -0.02, 0.0), tier=0)
         runner._subscribers = [perf, memory]
 
-        self._run(runner, queued_by={memory})
+        _run(runner, queued_by={memory})
 
         memory.on_queue_empty.assert_called_once()
         perf.on_queue_empty.assert_not_called()
 
     def test_subscriber_without_tier_is_normal(self, runner, mock_config):
         """Duck-typed subscribers that predate tiers schedule as tier 0."""
-        legacy = _make_subscriber("get-k16-v16-t7-p10", urgency=1.0)
+        legacy = _make_subscriber("get-k16-v16-t7-p10", key=(BACKFILL, -1.0, 0.0))
         del legacy.schedule_tier
-        memory = _make_subscriber("memory-sadd-m20", urgency=float("inf"), tier=1)
+        memory = _make_subscriber("memory-sadd-m20", key=(LANDMARK, 0.0, 0.0), tier=1)
         runner._subscribers = [memory, legacy]
 
-        self._run(runner, queued_by={legacy})
+        _run(runner, queued_by={legacy})
 
         legacy.on_queue_empty.assert_called_once()
         memory.on_queue_empty.assert_not_called()
 
 
-class TestUrgencyTierOrdering:
-    """Verify that urgency scores follow the expected priority hierarchy:
-    NIGHTLY (absolute preemption) > new series (inf) > bisection > backfill.
-    """
+def _state(n=100, landmarks=()):
+    commits = [f"c{i:03d}" for i in range(n)]
+    state = SweepState(merge_commits=commits, commit_dates={c: "2024-01-01" for c in commits})
+    state.landmarks = [Landmark(commit=commits[i], date="2024-01-01", label=label) for i, label in landmarks]
+    return state
 
-    def _make_coordinator(self, state, repo_path):
-        """Create a real SweepCoordinator with mocked git ops."""
-        from conductress.sweep.coordinator import SweepCoordinator
 
-        with patch.object(SweepCoordinator, "__init__", lambda self, *a, **kw: None):
-            coord = SweepCoordinator.__new__(SweepCoordinator)
-            coord.repo_path = repo_path
-            coord.state = state
-            coord.state_file = repo_path / "state.json"
-            coord.planner = SweepPlanner(state)
-            coord.engine = None
-        return coord
+def _point(state, i, value):
+    c = state.merge_commits[i]
+    state.points[c] = BenchmarkPoint(
+        commit=c, date="2024-01-01", value=value, cv=0.5, reps=3, status=PointStatus.COMPLETED
+    )
 
-    def test_new_series_has_infinite_urgency(self, tmp_path):
-        """A coordinator with <2 completed points should have infinite urgency."""
-        state = SweepState(
-            merge_commits=["aaa", "bbb", "ccc", "ddd", "eee"],
-            commit_dates={c: "2024-01-01" for c in ["aaa", "bbb", "ccc", "ddd", "eee"]},
-        )
-        # Only 1 completed point
-        state.points["aaa"] = BenchmarkPoint(commit="aaa", date="2024-01-01", value=1000.0, cv=0.5, reps=3)
 
-        coord = self._make_coordinator(state, tmp_path)
-        assert coord.get_urgency_score() == float("inf")
+def _coordinator(state, tmp_path):
+    """A real SweepCoordinator over ``state`` with git and I/O left out."""
+    from conductress.sweep.coordinator import SweepCoordinator
 
-    def test_bisection_scores_higher_than_backfill(self, tmp_path):
-        """A coordinator with active bisection scores higher than one doing backfill only."""
-        # Bisection scenario: two points with a large delta and wide gap
-        state_bisect = SweepState(
-            merge_commits=[f"c{i}" for i in range(100)],
-            commit_dates={f"c{i}": "2024-01-01" for i in range(100)},
-        )
-        state_bisect.points["c0"] = BenchmarkPoint(commit="c0", date="2024-01-01", value=1000.0, cv=0.5, reps=3)
-        state_bisect.points["c99"] = BenchmarkPoint(commit="c99", date="2024-01-01", value=1200.0, cv=0.5, reps=3)
+    coord = SweepCoordinator.__new__(SweepCoordinator)
+    coord.repo_path = tmp_path
+    coord.state = state
+    coord.state_file = tmp_path / "state.json"
+    coord.planner = SweepPlanner(state)
+    coord.engine = None
+    coord._label = "get-k16-v16-t7-p10"
+    return coord
 
-        # Backfill scenario: well-covered series with small deltas
-        state_backfill = SweepState(
-            merge_commits=[f"c{i}" for i in range(100)],
-            commit_dates={f"c{i}": "2024-01-01" for i in range(100)},
-        )
-        # Many points, all similar values (no bisection needed)
-        for i in range(0, 100, 5):
-            state_backfill.points[f"c{i}"] = BenchmarkPoint(
-                commit=f"c{i}", date="2024-01-01", value=1000.0 + i * 0.1, cv=0.5, reps=3
-            )
 
-        coord_bisect = self._make_coordinator(state_bisect, tmp_path)
-        coord_backfill = self._make_coordinator(state_backfill, tmp_path)
+class TestScheduleKey:
+    """schedule_key carries the planner's next task: its priority and size."""
 
-        score_bisect = coord_bisect.get_urgency_score()
-        score_backfill = coord_backfill.get_urgency_score()
+    def test_pending_landmark_is_landmark_priority(self, tmp_path):
+        state = _state(landmarks=[(50, "8.0")])
+        _point(state, 0, 1000.0)
+        _point(state, 99, 1500.0)  # a 50% step, which a bisection would otherwise chase
+        key = _coordinator(state, tmp_path).schedule_key()
+        assert key == (LANDMARK, 0.0, 0.0)
 
-        assert (
-            score_bisect > score_backfill
-        ), f"Bisection ({score_bisect:.2f}) should score higher than backfill ({score_backfill:.2f})"
+    def test_new_series_is_not_absolute(self, tmp_path):
+        """A series with <2 points ranks by its next task, not by an infinite urgency."""
+        state = _state()
+        key = _coordinator(state, tmp_path).schedule_key()
+        assert key[0] == BACKFILL, "an empty series without landmarks starts with a skeleton pass"
+        assert key[1] == -100.0, "the whole history is unsampled"
+        with_landmark = _state(landmarks=[(10, "7.2.4")])
+        assert _coordinator(with_landmark, tmp_path).schedule_key()[0] == LANDMARK
 
-    def test_larger_regression_scores_higher(self, tmp_path):
-        """A 20% regression in a wide gap should outscore a 5% regression in a narrow gap."""
-        # Large regression, wide gap
-        state_large = SweepState(
-            merge_commits=[f"c{i}" for i in range(100)],
-            commit_dates={f"c{i}": "2024-01-01" for i in range(100)},
-        )
-        state_large.points["c0"] = BenchmarkPoint(commit="c0", date="2024-01-01", value=1000.0, cv=0.5, reps=3)
-        state_large.points["c99"] = BenchmarkPoint(commit="c99", date="2024-01-01", value=800.0, cv=0.5, reps=3)
+    def test_bisection_magnitude_is_the_segment_delta(self, tmp_path):
+        state = _state()
+        _point(state, 0, 1000.0)
+        _point(state, 99, 1100.0)
+        key = _coordinator(state, tmp_path).schedule_key()
+        assert key[0] == BISECTION
+        assert key[1] == pytest.approx(-0.10)
 
-        # Small regression, narrow gap
-        state_small = SweepState(
-            merge_commits=[f"c{i}" for i in range(20)],
-            commit_dates={f"c{i}": "2024-01-01" for i in range(20)},
-        )
-        state_small.points["c0"] = BenchmarkPoint(commit="c0", date="2024-01-01", value=1000.0, cv=0.5, reps=3)
-        state_small.points["c19"] = BenchmarkPoint(commit="c19", date="2024-01-01", value=950.0, cv=0.5, reps=3)
+    def test_backfill_magnitude_is_the_gap(self, tmp_path):
+        state = _state()
+        for i in range(0, 100, 10):
+            _point(state, i, 1000.0 + i * 0.1)  # flat: nothing to bisect
+        key = _coordinator(state, tmp_path).schedule_key()
+        assert key[0] == BACKFILL
+        assert key[1] == -9.0, "largest gap: 9 unsampled commits between adjacent points"
 
-        coord_large = self._make_coordinator(state_large, tmp_path)
-        coord_small = self._make_coordinator(state_small, tmp_path)
+    def test_completed_series_has_no_key(self, tmp_path):
+        state = _state(n=3)
+        for i, v in enumerate((1000.0, 1001.0, 1002.0)):
+            _point(state, i, v)
+        assert _coordinator(state, tmp_path).schedule_key() is None
 
-        assert coord_large.get_urgency_score() > coord_small.get_urgency_score()
-
-    def test_nightly_preempts_infinite_urgency(self, runner, mock_config):
-        """Even a coordinator with inf urgency (new series) loses to NIGHTLY preemption."""
-        new_series = _make_subscriber("get-k16-v16-t7-p10", urgency=float("inf"), has_nightly=False)
-        nightly = _make_subscriber("memory-redis-set-k16-v64", urgency=0.0, has_nightly=True)
-        runner._subscribers = [new_series, nightly]
-
-        with patch("conductress.task_runner.TaskQueue") as MockQueue:
-            queue = MagicMock()
-            queue.get_all_tasks.return_value = [MagicMock()]
-            MockQueue.return_value = queue
-            runner._schedule_next()
-
-        nightly.on_queue_empty.assert_called_once()
-        new_series.on_queue_empty.assert_not_called()
-
-    def test_completed_series_has_zero_urgency(self, tmp_path):
-        """A fully-swept series with no remaining work returns 0 urgency."""
-        state = SweepState(
-            merge_commits=["aaa", "bbb", "ccc"],
-            commit_dates={"aaa": "2024-01-01", "bbb": "2024-02-01", "ccc": "2024-03-01"},
-        )
-        # All commits benchmarked with similar values (no bisection needed, no gaps)
-        state.points["aaa"] = BenchmarkPoint(commit="aaa", date="2024-01-01", value=1000.0, cv=0.5, reps=3)
-        state.points["bbb"] = BenchmarkPoint(commit="bbb", date="2024-02-01", value=1001.0, cv=0.5, reps=3)
-        state.points["ccc"] = BenchmarkPoint(commit="ccc", date="2024-03-01", value=1002.0, cv=0.5, reps=3)
-
-        coord = self._make_coordinator(state, tmp_path)
-        assert coord.get_urgency_score() == 0.0
+    def test_queueing_stamps_last_scheduled_at(self, tmp_path):
+        state = _state(landmarks=[(50, "8.0")])
+        coord = _coordinator(state, tmp_path)
+        coord._get_next_task = lambda: coord.planner.get_next_task(None)
+        coord._create_task = MagicMock(return_value=MagicMock())
+        coord._is_my_task = MagicMock(return_value=False)
+        assert coord.schedule_key()[2] == 0.0
+        with (
+            patch("conductress.sweep.coordinator.TaskQueue") as MockQueue,
+            patch.object(type(coord), "retired", False),
+        ):
+            MockQueue.return_value.get_all_tasks.return_value = []
+            assert coord.queue_next_if_needed() is True
+        assert coord.schedule_key()[2] > 0.0

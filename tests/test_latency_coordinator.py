@@ -83,8 +83,8 @@ class TestRetired:
     def test_is_retired(self, coordinator):
         assert coordinator.retired is True
 
-    def test_urgency_is_zero_even_with_no_points(self, coordinator):
-        assert coordinator.get_urgency_score() == 0.0
+    def test_no_schedule_key_even_with_no_points(self, coordinator):
+        assert coordinator.schedule_key() is None
 
     def test_never_queues(self, coordinator):
         with patch("conductress.sweep.coordinator.TaskQueue") as queue:

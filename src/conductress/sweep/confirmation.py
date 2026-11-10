@@ -449,8 +449,10 @@ class ConfirmationCoordinator:
     def schedule_tier(self) -> int:
         return CONFIRM_TIER
 
-    def get_urgency_score(self) -> float:
-        return 0.0
+    def schedule_key(self) -> tuple[int, float, float]:
+        from conductress.sweep.planner import TaskPriority
+
+        return (TaskPriority.CONFIRM.value, 0.0, 0.0)
 
     def has_nightly_task(self) -> bool:
         return False

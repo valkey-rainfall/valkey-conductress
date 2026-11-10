@@ -17,17 +17,18 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from conductress.sweep.planner import TaskPriority
 from conductress.sweep_config import SweepConfig, parse_selector, selector_matches
 from conductress.task_runner import TaskRunner
 
 CANONICAL_GET = "get-k16-v16-t7-p10"
 
 
-def _sub(workload_id=CANONICAL_GET, epoch_id="v1", urgency=1.0, has_nightly=False):
+def _sub(workload_id=CANONICAL_GET, epoch_id="v1", key=(TaskPriority.BACKFILL.value, -1.0, 0.0), has_nightly=False):
     sub = MagicMock()
     sub.workload_id = workload_id
     sub.epoch_id = epoch_id
-    sub.get_urgency_score = MagicMock(return_value=urgency)
+    sub.schedule_key = MagicMock(return_value=key)
     sub.has_nightly_task = MagicMock(return_value=has_nightly)
     sub.on_queue_empty = MagicMock()
     return sub
@@ -174,8 +175,8 @@ class TestNightlyPrecedenceIntegration:
 
     def test_v3_nightly_wins_over_v1_nightly(self, allow_all):
         runner = TaskRunner()
-        v1 = _sub(epoch_id="v1", has_nightly=True, urgency=100.0)
-        v3 = _sub(epoch_id="v3", has_nightly=True, urgency=0.0)
+        v1 = _sub(epoch_id="v1", has_nightly=True)
+        v3 = _sub(epoch_id="v3", has_nightly=True)
         runner._subscribers = [v1, v3]  # v1 registered first
 
         with (
@@ -209,10 +210,10 @@ class TestNightlyPrecedenceIntegration:
         v1.on_queue_empty.assert_called_once()
         v3.on_queue_empty.assert_not_called()
 
-    def test_equal_urgency_breaks_toward_higher_precedence_epoch(self, allow_all):
+    def test_equal_key_breaks_toward_higher_precedence_epoch(self, allow_all):
         runner = TaskRunner()
-        v1 = _sub(epoch_id="v1", urgency=5.0, has_nightly=False)
-        v3 = _sub(epoch_id="v3", urgency=5.0, has_nightly=False)
+        v1 = _sub(epoch_id="v1", key=(TaskPriority.BISECTION.value, -0.05, 0.0), has_nightly=False)
+        v3 = _sub(epoch_id="v3", key=(TaskPriority.BISECTION.value, -0.05, 0.0), has_nightly=False)
         runner._subscribers = [v1, v3]
 
         with (
@@ -227,11 +228,11 @@ class TestNightlyPrecedenceIntegration:
         v3.on_queue_empty.assert_called_once()
         v1.on_queue_empty.assert_not_called()
 
-    def test_higher_urgency_v1_still_beats_lower_urgency_v3(self, allow_all):
-        """Precedence is a tie-break for urgency, not an override of it."""
+    def test_higher_priority_v1_still_beats_lower_priority_v3(self, allow_all):
+        """Precedence is a tie-break for the schedule key, not an override of it."""
         runner = TaskRunner()
-        v1 = _sub(epoch_id="v1", urgency=50.0, has_nightly=False)
-        v3 = _sub(epoch_id="v3", urgency=1.0, has_nightly=False)
+        v1 = _sub(epoch_id="v1", key=(TaskPriority.LANDMARK.value, 0.0, 0.0), has_nightly=False)
+        v3 = _sub(epoch_id="v3", key=(TaskPriority.BISECTION.value, -0.10, 0.0), has_nightly=False)
         runner._subscribers = [v3, v1]
 
         with (

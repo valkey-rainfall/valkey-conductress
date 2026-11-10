@@ -363,68 +363,6 @@ class TestNamingConventions:
         assert len(files) == len(set(files)), f"Duplicate state files: {files}"
 
 
-class TestFlatnessDiscount:
-    """Tests for memory urgency flatness discount."""
-
-    def test_flat_segments_reduce_urgency(self, tmp_path):
-        """When most segments are flat (<1% delta), urgency is discounted."""
-        from conductress.sweep.memory_coordinator import MEMORY_WORKLOADS, MemorySweepCoordinator
-        from conductress.sweep.planner import BenchmarkPoint, SweepPlanner, SweepState
-
-        # Create a state with many flat segments
-        commits = [f"c{i:04d}" for i in range(100)]
-        state = SweepState(
-            merge_commits=commits,
-            commit_dates={c: f"2024-01-{(i%28)+1:02d}" for i, c in enumerate(commits)},
-        )
-        # Points at every 10th commit, all same value (flat)
-        for i in range(0, 100, 10):
-            state.points[commits[i]] = BenchmarkPoint(commit=commits[i], date="2024-01-01", value=100.0, cv=0.0, reps=3)
-        state_file = tmp_path / "test_state.json"
-        state.save(state_file)
-
-        with patch.object(MemorySweepCoordinator, "__init__", lambda self, *a, **kw: None):
-            coord = MemorySweepCoordinator.__new__(MemorySweepCoordinator)
-            coord.repo_path = tmp_path
-            coord.state_file = state_file
-            coord.state = state
-            coord.planner = SweepPlanner(state)
-            coord._workload = MEMORY_WORKLOADS[0]
-
-        score = coord.get_urgency_score()
-        # All segments are flat (0% delta), should be heavily discounted
-        assert score < 1.0  # Base backfill score ~3.3, discounted by 0.2x to ~0.66
-
-    def test_non_flat_segments_no_discount(self, tmp_path):
-        """When segments have significant deltas, no discount applied."""
-        from conductress.sweep.memory_coordinator import MEMORY_WORKLOADS, MemorySweepCoordinator
-        from conductress.sweep.planner import BenchmarkPoint, SweepPlanner, SweepState
-
-        commits = [f"c{i:04d}" for i in range(100)]
-        state = SweepState(
-            merge_commits=commits,
-            commit_dates={c: f"2024-01-{(i%28)+1:02d}" for i, c in enumerate(commits)},
-        )
-        # Points with alternating values (big deltas)
-        for i in range(0, 100, 10):
-            val = 100.0 if (i // 10) % 2 == 0 else 120.0
-            state.points[commits[i]] = BenchmarkPoint(commit=commits[i], date="2024-01-01", value=val, cv=0.0, reps=3)
-        state_file = tmp_path / "test_state.json"
-        state.save(state_file)
-
-        with patch.object(MemorySweepCoordinator, "__init__", lambda self, *a, **kw: None):
-            coord = MemorySweepCoordinator.__new__(MemorySweepCoordinator)
-            coord.repo_path = tmp_path
-            coord.state_file = state_file
-            coord.state = state
-            coord.planner = SweepPlanner(state)
-            coord._workload = MEMORY_WORKLOADS[0]
-
-        score = coord.get_urgency_score()
-        # 20% deltas everywhere — no discount, should stay at base (~3.3)
-        assert score > 3.0
-
-
 class TestEngineSupport:
     """Tests for multi-engine (Redis) memory sweep support."""
 

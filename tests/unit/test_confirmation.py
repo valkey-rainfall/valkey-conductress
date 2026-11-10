@@ -283,7 +283,8 @@ class TestCoordinator:
     def test_scheduler_interface(self, rig):
         coordinator, _, _ = rig
         assert coordinator.schedule_tier() == cf.CONFIRM_TIER == 2
-        assert coordinator.get_urgency_score() == 0.0 and not coordinator.has_nightly_task()
+        assert coordinator.schedule_key() == (TaskPriority.CONFIRM.value, 0.0, 0.0)
+        assert not coordinator.has_nightly_task()
         assert TaskPriority.CONFIRM.value > TaskPriority.BACKFILL.value
 
     def test_automatic_trigger_opens_one_run(self, rig):
@@ -428,11 +429,11 @@ def test_confirm_never_queues_while_another_series_has_work(rig):
     coordinator, _, _ = rig
     coordinator.on_queue_empty = MagicMock()
     backfill = MagicMock(workload_id="get-a", retired=False)
-    backfill.get_urgency_score.return_value = 0.5
+    backfill.schedule_key.return_value = (TaskPriority.BACKFILL.value, -3.0, 0.0)
     backfill.has_nightly_task.return_value = False
     backfill.schedule_tier.return_value = 0
     memory = MagicMock(workload_id="memory-a", retired=False)
-    memory.get_urgency_score.return_value = 9.0
+    memory.schedule_key.return_value = (TaskPriority.BACKFILL.value, -800.0, 0.0)
     memory.has_nightly_task.return_value = False
     memory.schedule_tier.return_value = 1  # deferred memory backfill
 

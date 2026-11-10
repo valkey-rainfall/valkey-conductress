@@ -441,10 +441,21 @@ year, so the memory coordinators defer their **gap-filling backfill**
 (`MemorySweepCoordinator.defer_backfill`): when a memory series' next planner
 task is `BACKFILL`, the runner schedules it only once every throughput and
 latency series has nothing to queue. Nightly HEAD keeps its absolute priority,
-and a memory series' release landmarks and bisections compete on urgency with
-every other series, so a new memory series still gets its landmarks and
-change-points promptly; only its flat regions wait for the performance backfill
-to run out of work.
+and a memory series' release landmarks and bisections rank against every other
+series by the same planner priority (see below), so a new memory series still
+gets its landmarks and change-points promptly; only its flat regions wait for
+the performance backfill to run out of work.
+
+Across series, the runner orders the next task of every series by one key:
+tier first (the deferral above), then the planner's own `TaskPriority`
+(NIGHTLY > LANDMARK > BISECTION > BACKFILL), so a release landmark in any
+series runs before a bisection in any other. Within one priority the larger
+task runs first: for BISECTION the relative delta of the segment being halved,
+for BACKFILL the unsampled commit span. Equal tasks (every landmark, for
+example) rotate: the series that queued least recently goes first, and a full
+tie breaks toward the higher-precedence epoch. Each decision logs the sorted
+order as `[sweep] schedule order:` with `(tier, priority, magnitude)` per
+series.
 
 The completion-time **identity guard** in the v3 coordinator refuses to record a
 completed cell whose `threads` (or any other identity field) does not match the
