@@ -217,6 +217,14 @@ class TestZsetBatteryTests:
         assert " ';' " in entry.test_command  # semicolon quoted for the shell
         assert entry.keyspace is None
 
+    def test_zincrby_updates_preloaded_members(self):
+        """zincrby draws members from the preloaded keyspace with the same
+        naming as -t zadd, so each call updates an existing score."""
+        entry = PerfTaskRunner.tests["zincrby"]
+        assert entry.preload_command == "-t zadd"
+        assert entry.test_command == " -- ZINCRBY myzset 1 element:__rand_int__"
+        assert entry.keyspace is None
+
     def test_zpop_is_sliding_window_with_wide_append_keyspace(self):
         """zpop pops the min and appends a distinct-prefix member; its timed -r
         is overridden to a huge namespace so the resident set never drains empty."""

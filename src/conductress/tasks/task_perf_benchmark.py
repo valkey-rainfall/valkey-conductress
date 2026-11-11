@@ -259,6 +259,14 @@ class PerfTaskRunner(BaseTaskRunner):
         "sadd": Test(name="sadd", preload_command="-t sadd", test_command="-t sadd"),
         "hset": Test(name="hset", preload_command="-t hset", test_command="-t hset"),
         "zadd": Test(name="zadd", preload_command="-t zadd", test_command="-t zadd"),
+        # Score update of an existing member: the member is drawn from the
+        # preloaded keyspace, so every call rewrites a score in place and the
+        # set size stays constant.
+        "zincrby": Test(
+            name="zincrby",
+            preload_command="-t zadd",
+            test_command=" -- ZINCRBY myzset 1 element:__rand_int__",
+        ),
         "zrank": Test(
             name="zrank",
             preload_command="-t zadd",
@@ -538,6 +546,7 @@ class PerfTaskRunner(BaseTaskRunner):
                 "sismember": f" -- SADD {padded_key} element:__rand_int__",
                 "hset": f" -- HSET {padded_key} field:__rand_int__ __rand_field__",
                 "zadd": f" -- ZADD {padded_key} __rand_int__ element:__rand_int__",
+                "zincrby": f" -- ZADD {padded_key} __rand_int__ element:__rand_int__",
                 "mget": f" -- SET {padded_key} __rand_field__",
                 "mget10": f" -- SET {padded_key} __rand_field__",
                 "mset10": f" -- SET {padded_key} __rand_field__",
@@ -569,6 +578,7 @@ class PerfTaskRunner(BaseTaskRunner):
                 "sismember": f" -- SISMEMBER {padded_key} element:__rand_int__",
                 "hset": f" -- HSET {padded_key} field:__rand_int__ __rand_field__",
                 "zadd": f" -- ZADD {padded_key} __rand_int__ element:__rand_int__",
+                "zincrby": f" -- ZINCRBY {padded_key} 1 element:__rand_int__",
                 "mget": f" -- MGET {padded_key} {padded_key} {padded_key} {padded_key}",
                 "mget10": f" -- MGET {padded_key} {padded_key} {padded_key} {padded_key} {padded_key} {padded_key} {padded_key} {padded_key} {padded_key} {padded_key}",
                 "mset10": f" -- MSET {padded_key} __rand_field__ {padded_key} __rand_field__ {padded_key} __rand_field__ {padded_key} __rand_field__ {padded_key} __rand_field__ {padded_key} __rand_field__ {padded_key} __rand_field__ {padded_key} __rand_field__ {padded_key} __rand_field__ {padded_key} __rand_field__",

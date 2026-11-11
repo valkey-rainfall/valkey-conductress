@@ -281,6 +281,7 @@ Results are grouped by matching parameters (test type, value size, key size, IO 
 | `sadd` | SADD set members | SADD preload | `-t sadd` |
 | `hset` | HSET hash fields | HSET preload | `-t hset` |
 | `zadd` | ZADD sorted set members | ZADD preload | `-t zadd` |
+| `zincrby` | ZINCRBY score updates of existing members | ZADD preload | Custom command |
 | `zrank` | ZRANK sorted set lookups | ZADD preload | Custom command |
 | `zcount` | ZCOUNT sorted set range queries | ZADD preload | Custom command |
 | `zscore` | ZSCORE sorted set score lookups | ZADD preload | Custom command |
