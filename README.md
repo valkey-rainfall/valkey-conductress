@@ -175,7 +175,7 @@ conductress queue add-scenario --scenario connection-storm --duration 60s
 conductress queue add-latency valkey my-branch 100000 --value-size 16
 ```
 
-**`add-cachecannon`** — Queue a GET/SET benchmark driven by the cachecannon generator, which has a native warmup period, a fixed-rate mode, and exact integer throughput output. Supports `--distribution {uniform,zipf}` and `--set-ratio` for a mixed workload.
+**`add-cachecannon`** — Queue a GET/SET benchmark driven by the cachecannon generator, which has a native warmup period, a fixed-rate mode, and exact integer throughput output. Supports `--distribution {uniform,zipf}` and `--set-ratio` for a mixed workload, and `--workload2-*` for a second workload with its own connections and command mix in the same task ([details](docs/cachecannon-two-workloads.md)).
 
 ```bash
 conductress queue add-cachecannon --test get --sizes 512 --connections 400 --distribution zipf
@@ -412,6 +412,7 @@ The runner writes per-host runtime state into the project root: `sweep_data/`, `
 - [Connection-storm scenario](docs/connection-storm-scenario.md) — the reconnecting-client burst overlay, its `--storm-*` knobs, and the TLS herd.
 - [Replica-read task](docs/replica-read-task.md) — measuring replica read performance under a live replication stream.
 - [Real-NIC hairpin](docs/real-nic-hairpin.md) — running the benchmark client in a separate network namespace over a real NIC path.
+- [Two cachecannon workloads in one task](docs/cachecannon-two-workloads.md) - dedicated writer and reader connections against one keyspace, and how to reach a target GET/SET mix.
 - [Fleet-aware CLI](docs/fleet-cli.md) — fleet discovery, remote queue management, secure client configuration, and runner/platform routing.
 
 ### Design notes and implementation history

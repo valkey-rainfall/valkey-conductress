@@ -936,6 +936,31 @@ def build_parser() -> argparse.ArgumentParser:
         "(dual-ENI real-NIC hairpin; requires host setup per docs/real-nic-hairpin.md). "
         "Empty = default namespace (loopback path).",
     )
+    cc_parser.add_argument(
+        "--workload2-connections",
+        type=int,
+        default=0,
+        help="Connections of a second workload that runs at the same time as the main one, "
+        "against the same server and keyspace (default 0 = off). See docs/cachecannon-two-workloads.md.",
+    )
+    cc_parser.add_argument(
+        "--workload2-threads",
+        type=int,
+        default=1,
+        help="Worker threads of the second workload, in addition to --threads (default: 1)",
+    )
+    cc_parser.add_argument(
+        "--workload2-set-ratio",
+        type=int,
+        default=100,
+        help="Percentage of SET commands in the second workload, 0-100 (default 100 = SET-only; 0 = GET-only)",
+    )
+    cc_parser.add_argument(
+        "--workload2-rate",
+        type=int,
+        default=0,
+        help="Fixed request rate of the second workload in req/s (default 0 = closed loop)",
+    )
     _add_note_and_build_args(cc_parser)
     _add_topology_args(cc_parser)
     cc_parser.add_argument(
@@ -1717,6 +1742,23 @@ def handle_queue_add_cachecannon(args: argparse.Namespace) -> int:
     if args.rate < 0:
         print(f"Error: --rate must be >= 0 (0 = closed loop), got {args.rate}", file=sys.stderr)
         return 1
+    if args.workload2_connections < 0:
+        print(f"Error: --workload2-connections must be >= 0, got {args.workload2_connections}", file=sys.stderr)
+        return 1
+    if args.workload2_connections:
+        if args.workload2_threads < 1 or args.workload2_connections < args.workload2_threads:
+            print(
+                "Error: --workload2-threads must be >= 1 and <= --workload2-connections, "
+                f"got {args.workload2_threads}",
+                file=sys.stderr,
+            )
+            return 1
+        if not 0 <= args.workload2_set_ratio <= 100:
+            print(f"Error: --workload2-set-ratio must be 0-100, got {args.workload2_set_ratio}", file=sys.stderr)
+            return 1
+        if args.workload2_rate < 0:
+            print(f"Error: --workload2-rate must be >= 0 (0 = closed loop), got {args.workload2_rate}", file=sys.stderr)
+            return 1
     try:
         from conductress.tasks.task_cachecannon import parse_info_sections
 
@@ -1754,6 +1796,10 @@ def handle_queue_add_cachecannon(args: argparse.Namespace) -> int:
         info_sections=args.info_sections,
         client_netns=args.client_netns,
         processes=args.processes,
+        workload2_connections=args.workload2_connections,
+        workload2_threads=args.workload2_threads,
+        workload2_set_ratio=args.workload2_set_ratio,
+        workload2_rate_limit=args.workload2_rate,
     )
     queue.submit_task(task)
     submission = queue.finish()
@@ -1776,6 +1822,12 @@ def handle_queue_add_cachecannon(args: argparse.Namespace) -> int:
     if args.distribution != "uniform":
         print(f"  distribution={args.distribution}")
     print(f"  connections={args.connections} threads={args.threads}")
+    if args.workload2_connections:
+        w2_rate = f" rate={args.workload2_rate} req/s" if args.workload2_rate else " closed loop"
+        print(
+            f"  workload2: connections={args.workload2_connections} threads={args.workload2_threads} "
+            f"set-ratio={args.workload2_set_ratio}%{w2_rate}"
+        )
     print(f"  io-threads={args.io_threads} duration={duration}s warmup={warmup}s reps={args.repetitions}")
     if args.server_args:
         print(f"  server-args: {args.server_args}")

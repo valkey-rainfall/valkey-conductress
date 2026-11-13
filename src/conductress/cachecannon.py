@@ -181,6 +181,64 @@ def split_generator(processes: int, connections: int, threads: int, cpu_list: st
     return out
 
 
+def split_cpu_list(cpu_list: str, weights: list[int]) -> list[str]:
+    """Cut a cpulist into contiguous, disjoint slices, one per weight.
+
+    Slice sizes follow the weights (thread counts), so a list of exactly
+    sum(weights) cpus is cut exactly; any other length is cut in proportion,
+    each slice keeping at least one cpu. An empty list gives "" per slice (the
+    OS schedules).
+    """
+    if not weights or any(w < 1 for w in weights):
+        raise ValueError(f"weights must be >= 1, got {weights}")
+    if not cpu_list:
+        return ["" for _ in weights]
+    cpus = expand_cpu_list(cpu_list)
+    if len(cpus) < len(weights):
+        raise ValueError(f"cpu_list has {len(cpus)} cpus, fewer than the {len(weights)} slices needed")
+    total = sum(weights)
+    bounds = [0]
+    acc = 0
+    for i, w in enumerate(weights):
+        acc += w
+        remaining = len(weights) - i - 1
+        cut = round(len(cpus) * acc / total)
+        # Keep at least one cpu for this slice and for every later slice.
+        cut = max(cut, bounds[-1] + 1)
+        cut = min(cut, len(cpus) - remaining)
+        bounds.append(cut)
+    return [compact_cpu_list(cpus[bounds[i] : bounds[i + 1]]) for i in range(len(weights))]
+
+
+def workload_summary(parsed: dict) -> dict:
+    """Per-workload counts of one parsed (or merged) result: rate, requests and GET/SET counts.
+
+    The GET and SET counts come from the per-command latency blocks, which
+    count the requests completed in the scored window.
+    """
+    latency_get = parsed.get("latency_get")
+    latency_set = parsed.get("latency_set")
+    return {
+        "throughput_rps": float(parsed["throughput_rps"]),
+        "requests": parsed.get("requests"),
+        "get_count": int(latency_get["count"]) if latency_get else 0,
+        "set_count": int(latency_set["count"]) if latency_set else 0,
+        "error_pct": float(parsed["error_pct"]),
+        "hit_rate": parsed.get("hit_rate"),
+        "latency_get": latency_get,
+        "latency_set": latency_set,
+    }
+
+
+def achieved_set_pct(summaries: list[dict]) -> Optional[float]:
+    """Percentage of SETs among all GETs and SETs the workloads completed (None when nothing ran)."""
+    gets = sum(s["get_count"] for s in summaries)
+    sets = sum(s["set_count"] for s in summaries)
+    if gets + sets == 0:
+        return None
+    return 100.0 * sets / (gets + sets)
+
+
 def merge_parsed_results(parts: list[dict]) -> dict:
     """Combine the parse_json_results() dicts of N concurrent processes into one.
 
