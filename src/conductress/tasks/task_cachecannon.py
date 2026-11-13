@@ -20,11 +20,14 @@ from typing import Any, Literal, Optional
 
 from conductress.cachecannon import (  # noqa: F401  (re-exported for callers/tests)
     DEFAULT_CACHECANNON_BINARY,
+    achieved_set_pct,
     generate_toml_config,
     merge_parsed_results,
     parse_json_results,
+    split_cpu_list,
     split_generator,
     workload_issues_gets,
+    workload_summary,
 )
 from conductress.config import (
     DEFAULT_DURATION,
@@ -258,10 +261,38 @@ class CachecannonTaskData(BaseTaskData):
     # per-process p50/p99 kept alongside). See cachecannon.split_generator.
     processes: int = 1
 
+    # Optional second workload that runs at the same time as the main one, in
+    # its own cachecannon process with its own connection count, command mix
+    # and rate limit, against the same server and keyspace (docs: "Two
+    # workloads in one task" in docs/cachecannon-two-workloads.md).
+    # workload2_connections = 0 (default) turns it off and leaves the task
+    # unchanged.  workload2_set_ratio is the plain SET percentage of that
+    # workload (0 = GET-only, 100 = SET-only).  When it is on, one prefill run
+    # seeds the keyspace before each rep, and then both workloads start
+    # together with prefill off, so their warmup and scored windows line up.
+    workload2_connections: int = 0
+    workload2_threads: int = 1
+    workload2_set_ratio: int = 100
+    workload2_rate_limit: int = 0  # fixed req/s for workload 2; 0 = closed loop
+
     def __post_init__(self):
         super().__post_init__()
         self.warmup = int(self.warmup)
         self.duration = int(self.duration)
+        if self.workload2_connections < 0:
+            raise ValueError(f"workload2_connections must be >= 0, got {self.workload2_connections}")
+        if self.workload2_connections:
+            if self.workload2_threads < 1:
+                raise ValueError(f"workload2_threads must be >= 1, got {self.workload2_threads}")
+            if self.workload2_connections < self.workload2_threads:
+                raise ValueError(
+                    f"workload2_connections ({self.workload2_connections}) must be >= "
+                    f"workload2_threads ({self.workload2_threads})"
+                )
+            if not 0 <= self.workload2_set_ratio <= 100:
+                raise ValueError(f"workload2_set_ratio must be 0-100, got {self.workload2_set_ratio}")
+            if self.workload2_rate_limit < 0:
+                raise ValueError(f"workload2_rate_limit must be >= 0, got {self.workload2_rate_limit}")
         if self.client_netns and self.tls:
             # The bootstrap server certificate's SAN carries only 127.0.0.1 /
             # localhost; a hairpin endpoint is the primary ENI's address, so
@@ -299,14 +330,20 @@ class CachecannonTaskData(BaseTaskData):
         label = f"mixed s{self.set_ratio}" if self.set_ratio > 0 else self.test
         if self.distribution != "uniform":
             label += f" {self.distribution}"
+        if self.workload2_connections:
+            label += f" w2s{self.workload2_set_ratio}"
         return label
 
     def short_description(self) -> str:
         rate = f", {self.rate_limit} req/s" if self.rate_limit > 0 else ""
         netns = f", netns {self.client_netns}" if self.client_netns else ""
+        w2 = ""
+        if self.workload2_connections:
+            w2_rate = f" {self.workload2_rate_limit} req/s" if self.workload2_rate_limit > 0 else ""
+            w2 = f", w2 {self.workload2_connections}c {self.workload2_threads}t s{self.workload2_set_ratio}{w2_rate}"
         return (
             f"cachecannon {self.workload_label()}, {HumanByte.to_human(self.val_size)} values, "
-            f"P{self.pipelining}, {self.connections}c, {self.threads}t{rate}{netns}, "
+            f"P{self.pipelining}, {self.connections}c, {self.threads}t{rate}{netns}{w2}, "
             f"{HumanTime.to_human(self.duration)} x{self.repetitions}"
         )
 
@@ -345,6 +382,10 @@ class CachecannonTaskData(BaseTaskData):
             tls=self.tls,
             client_netns=self.client_netns,
             processes=self.processes,
+            workload2_connections=self.workload2_connections,
+            workload2_threads=self.workload2_threads,
+            workload2_set_ratio=self.workload2_set_ratio,
+            workload2_rate_limit=self.workload2_rate_limit,
         )
 
 
@@ -391,6 +432,10 @@ class CachecannonTaskRunner(BaseTaskRunner):
         tls: bool = False,
         client_netns: str = "",
         processes: int = 1,
+        workload2_connections: int = 0,
+        workload2_threads: int = 1,
+        workload2_set_ratio: int = 100,
+        workload2_rate_limit: int = 0,
     ):
         super().__init__(task_id)
         self.logger = logging.getLogger(f"{self.__class__.__name__}.{test}")
@@ -433,6 +478,11 @@ class CachecannonTaskRunner(BaseTaskRunner):
         if processes < 1:
             raise ValueError(f"processes must be >= 1, got {processes}")
         self.processes = processes
+        self.workload2_connections = workload2_connections
+        self.workload2_threads = workload2_threads if workload2_connections else 0
+        self.workload2_set_ratio = workload2_set_ratio
+        self.workload2_rate_limit = workload2_rate_limit
+        self._workload2_toml = ""
         # TLS transport: the server opens a second listener on the TLS port with
         # the bootstrap test certificates and the generator connects over it
         # (endpoint pointed at self._tls_port, [target] tls keys emitted below).
@@ -478,10 +528,15 @@ class CachecannonTaskRunner(BaseTaskRunner):
         workload = f"mixed s{set_ratio}" if set_ratio > 0 else test
         if distribution != "uniform":
             workload += f" {distribution}"
+        if workload2_connections:
+            workload += f" w2s{workload2_set_ratio}"
         self.workload = workload
         effective_reps = max_reps if max_reps > 0 else repetitions
         rep_label = f"x{repetitions}" if effective_reps == repetitions else f"x{repetitions}-{effective_reps}"
         rate_label = f", {rate_limit} req/s" if rate_limit > 0 else ""
+        if workload2_connections:
+            w2_rate = f" {workload2_rate_limit} req/s" if workload2_rate_limit > 0 else ""
+            rate_label += f", w2 {workload2_connections}c {self.workload2_threads}t{w2_rate}"
         self.title = (
             f"cachecannon {workload}, {source}:{specifier}, io-threads={io_threads}, "
             f"P{pipelining}, {connections}c, {threads}t{rate_label}, "
@@ -512,7 +567,7 @@ class CachecannonTaskRunner(BaseTaskRunner):
         is_chiplet = platform is not None and platform.needs_single_cache_pinning
         benchmark_cpus = client.allocate_client_cpus(
             benchmark_alloc_tag,
-            self.threads,
+            self.threads + self.workload2_threads,
             avoid_tags=[server_tag],
             minimize_cache_groups=is_chiplet,
         )
@@ -543,6 +598,27 @@ class CachecannonTaskRunner(BaseTaskRunner):
             numa_node = 0  # sensible default
             return f"{netns_prefix}numactl --membind={numa_node} {self.cachecannon_binary} {toml_path}"
         return f"{netns_prefix}{self.cachecannon_binary} {toml_path}"
+
+    def _run_prefill(self, command_string: str) -> None:
+        """Run the shared prefill cachecannon process to completion; raise if it fails."""
+        self.logger.info("Shared prefill: %s", command_string)
+        command = RealtimeCommand(command_string)
+        command.start()
+        lines: list[str] = []
+        while True:
+            running = command.is_running()
+            out, err = command.poll_output()
+            for chunk in (out, err):
+                if chunk:
+                    lines.append(chunk)
+            if not running:
+                break
+            time.sleep(1)
+        exit_code = command.p.returncode if command.p else None
+        if exit_code != 0:
+            raise RuntimeError(
+                f"cachecannon shared prefill exited with code {exit_code}. Output:\n{''.join(lines)[-2000:]}"
+            )
 
     async def run(self):
         """Run the cachecannon benchmark with repetitions."""
@@ -602,7 +678,7 @@ class CachecannonTaskRunner(BaseTaskRunner):
                     if self.benchmark_cpu_override:
                         self._client_allocated_cores = count_cpu_list(self.benchmark_cpu_override)
                     elif benchmark_alloc_tag is not None:
-                        self._client_allocated_cores = self.threads
+                        self._client_allocated_cores = self.threads + self.workload2_threads
                     # Preflight for the dual-ENI hairpin: network namespaces do
                     # NOT persist across reboots, so fail loudly and point at
                     # the fix rather than dying later with a cryptic connect
@@ -645,7 +721,24 @@ class CachecannonTaskRunner(BaseTaskRunner):
 
                 # One TOML per generator process. processes == 1 reproduces the
                 # single-process files byte for byte (same name, same content).
-                plan = split_generator(self.processes, self.connections, self.threads, cpu_list)
+                # With a second workload the client cpus are cut between the
+                # two workloads by thread count, the main workload's processes
+                # run with prefill off (one shared prefill run seeds the
+                # keyspace first, below), and workload 2 is one more process.
+                main_cpus, w2_cpus = cpu_list, ""
+                if self.workload2_connections:
+                    main_cpus, w2_cpus = split_cpu_list(cpu_list, [self.threads, self.workload2_threads])
+                common_toml = dict(
+                    endpoint=endpoint,
+                    pipeline_depth=self.pipelining,
+                    keyspace_count=self.keyspace_count,
+                    val_size=self.val_size,
+                    distribution=self.distribution,
+                    tls=self.tls,
+                    tls_hostname=server.ip if self.tls else "",
+                    tls_ca_file=f"{TLS_CERT_DIR}/ca.crt" if self.tls else "",
+                )
+                plan = split_generator(self.processes, self.connections, self.threads, main_cpus)
                 toml_paths: list[str] = []
                 command_strings: list[str] = []
                 for pidx, part in enumerate(plan):
@@ -654,18 +747,12 @@ class CachecannonTaskRunner(BaseTaskRunner):
                         warmup=self.warmup,
                         threads=part["threads"],
                         cpu_list=part["cpu_list"],
-                        endpoint=endpoint,
                         connections=part["connections"],
-                        pipeline_depth=self.pipelining,
-                        keyspace_count=self.keyspace_count,
-                        val_size=self.val_size,
                         test=self.test,
                         set_ratio=self.set_ratio,
-                        distribution=self.distribution,
                         rate_limit=self.rate_limit // self.processes if self.rate_limit else 0,
-                        tls=self.tls,
-                        tls_hostname=server.ip if self.tls else "",
-                        tls_ca_file=f"{TLS_CERT_DIR}/ca.crt" if self.tls else "",
+                        prefill=not self.workload2_connections,
+                        **common_toml,
                     )
                     suffix = "" if self.processes == 1 else f"_p{pidx+1}"
                     toml_path = str(self.file_protocol.work_dir / f"cachecannon_rep{rep+1}{suffix}.toml")
@@ -673,6 +760,42 @@ class CachecannonTaskRunner(BaseTaskRunner):
                         f.write(toml_content)
                     toml_paths.append(toml_path)
                     command_strings.append(self._build_command(toml_path, part["cpu_list"]))
+                if self.workload2_connections:
+                    self._workload2_toml = generate_toml_config(
+                        duration=self.duration,
+                        warmup=self.warmup,
+                        threads=self.workload2_threads,
+                        cpu_list=w2_cpus,
+                        connections=self.workload2_connections,
+                        test="get",  # with set_ratio 0 this is GET-only; set_ratio 100 is SET-only
+                        set_ratio=self.workload2_set_ratio,
+                        rate_limit=self.workload2_rate_limit,
+                        prefill=False,
+                        **common_toml,
+                    )
+                    w2_path = str(self.file_protocol.work_dir / f"cachecannon_rep{rep+1}_w2.toml")
+                    with open(w2_path, "w") as f:
+                        f.write(self._workload2_toml)
+                    command_strings.append(self._build_command(w2_path, w2_cpus))
+                    # Shared prefill: one short run of the main workload's shape
+                    # with prefill on, to completion, so both workloads start on
+                    # a full keyspace with aligned warmup and scored windows.
+                    prefill_toml = generate_toml_config(
+                        duration=1,
+                        warmup=0,
+                        threads=self.threads,
+                        cpu_list=main_cpus,
+                        connections=self.connections,
+                        test=self.test,
+                        set_ratio=self.set_ratio,
+                        prefill=True,
+                        **common_toml,
+                    )
+                    prefill_path = str(self.file_protocol.work_dir / f"cachecannon_rep{rep+1}_prefill.toml")
+                    with open(prefill_path, "w") as f:
+                        f.write(prefill_toml)
+                    self._run_prefill(self._build_command(prefill_path, main_cpus))
+                n_main = len(plan)
                 command_string = command_strings[0]
                 self.logger.info(
                     "Starting cachecannon (rep %d/%d, %d process%s): %s",
@@ -876,7 +999,18 @@ class CachecannonTaskRunner(BaseTaskRunner):
                 # per process, then merge (sum throughput, worst error_pct, hit
                 # rate from summed hits/misses, pessimistic latency block).
                 full_output = "\n".join(output_lines)
-                parsed = merge_parsed_results([parse_json_results("\n".join(out)) for out in outputs])
+                per_process = [parse_json_results("\n".join(out)) for out in outputs]
+                parsed = merge_parsed_results(per_process)
+                if self.workload2_connections:
+                    # Per-workload counts, so the achieved GET/SET mix of the
+                    # task can be checked (a fixed connection split does not
+                    # give an exact mix in closed loop).
+                    summaries = [
+                        workload_summary(merge_parsed_results(per_process[:n_main])),
+                        workload_summary(per_process[n_main]),
+                    ]
+                    parsed["workloads"] = {"main": summaries[0], "workload2": summaries[1]}
+                    parsed["achieved_set_pct"] = achieved_set_pct(summaries)
 
                 # Fail loudly on errors or low hit rate
                 if parsed["error_pct"] > 0:
@@ -889,7 +1023,10 @@ class CachecannonTaskRunner(BaseTaskRunner):
                 # hit rate 0.0 by definition, and the unconditional check
                 # failed every valid pure-SET task.
                 if (
-                    workload_issues_gets(self.test, self.set_ratio)
+                    (
+                        workload_issues_gets(self.test, self.set_ratio)
+                        or (self.workload2_connections and self.workload2_set_ratio < 100)
+                    )
                     and parsed["hit_rate"]
                     and parsed["hit_rate"]["percent"] < 99.0
                 ):
@@ -1065,9 +1202,25 @@ class CachecannonTaskRunner(BaseTaskRunner):
                 "error_pct": r["error_pct"],
                 "hit_rate": r.get("hit_rate"),
                 "latency": r.get("latency"),
+                **(
+                    {"workloads": r["workloads"], "achieved_set_pct": r["achieved_set_pct"]} if "workloads" in r else {}
+                ),
             }
             for r in all_results
         ]
+        if self.workload2_connections:
+            # Workload 2's settings and TOML; the top-level counts, rate and
+            # latency above are the merged totals of both workloads.
+            detailed_data["workload2"] = {
+                "connections": self.workload2_connections,
+                "threads": self.workload2_threads,
+                "set_ratio": self.workload2_set_ratio,
+                "rate_limit": self.workload2_rate_limit,
+                "toml_config": self._workload2_toml,
+            }
+            if all_results and "workloads" in all_results[-1]:
+                detailed_data["workloads"] = all_results[-1]["workloads"]
+                detailed_data["achieved_set_pct"] = all_results[-1]["achieved_set_pct"]
 
         if self._client_cores_busy_per_rep:
             detailed_data["client_cpu"] = summarize_client_cpu(

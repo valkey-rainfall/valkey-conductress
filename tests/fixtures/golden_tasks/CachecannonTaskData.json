@@ -48,5 +48,9 @@
   "score_aggregate": "mean",
   "tls": false,
   "client_netns": "",
-  "processes": 1
+  "processes": 1,
+  "workload2_connections": 0,
+  "workload2_threads": 1,
+  "workload2_set_ratio": 100,
+  "workload2_rate_limit": 0
 }
