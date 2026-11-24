@@ -157,6 +157,31 @@ class TestBinaryManagerEngine:
         assert mgr.binary_name == "redis-server"
 
 
+class TestOlderRedisReleaseAdHoc:
+    """An ad hoc task may name a Redis release below the sweep floor; only the sweep is bounded by it."""
+
+    @pytest.mark.parametrize("specifier,resolved", [("7.2.9", "refs/tags/7.2.9"), ("7.2", "refs/remotes/origin/7.2")])
+    def test_specifier_resolution_does_not_consult_the_sweep_floor(self, specifier, resolved):
+        import asyncio
+
+        host = MagicMock()
+        host.ip = "127.0.0.1"
+        host.run_host_command = AsyncMock(return_value=(resolved + "\n", ""))
+        mgr = BinaryManager(host)
+        mgr.source = "redis"
+        expected = f"origin/{specifier}" if resolved.startswith("refs/remotes/origin/") else specifier
+        assert asyncio.run(mgr._normalize_specifier(specifier)) == expected
+
+    def test_floor_stays_with_the_sweep(self):
+        """Nothing outside the sweep package reads floor_tag."""
+        import conductress.binary_manager as bm
+        import conductress.cli as cli
+        import conductress.server as server
+
+        for module in (bm, cli, server):
+            assert "floor_tag" not in Path(module.__file__).read_text(encoding="utf-8"), module.__name__
+
+
 class TestExporterEngineMetadata:
     """Exporter produces correct metadata for different engines."""
 

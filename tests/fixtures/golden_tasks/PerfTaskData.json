@@ -43,5 +43,6 @@
   "keyspace": 0,
   "client_netns": "",
   "bench_binary": "",
+  "access": "uniform",
   "generator_profile": ""
 }

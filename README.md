@@ -283,18 +283,40 @@ Results are grouped by matching parameters (test type, value size, key size, IO 
 | `zadd` | ZADD sorted set members | ZADD preload | `-t zadd` |
 | `zincrby` | ZINCRBY score updates of existing members | ZADD preload | Custom command |
 | `zrank` | ZRANK sorted set lookups | ZADD preload | Custom command |
+| `zrevrank` | ZREVRANK sorted set lookups (rank from the high end) | ZADD preload | Custom command |
+| `zmscore` | ZMSCORE score lookups, 8 members per call | ZADD preload | Custom command |
+| `zcard` | ZCARD size reads (control: touches no member) | ZADD preload | Custom command |
 | `zcount` | ZCOUNT sorted set range queries | ZADD preload | Custom command |
 | `zscore` | ZSCORE sorted set score lookups | ZADD preload | Custom command |
 | `zrange` | ZRANGE rank-range scans (~100 elements at a random offset) | ZADD preload | Custom command |
 | `zrangebyscore` | ZRANGEBYSCORE score-range scans (~100 elements in a random window) | ZADD preload | Custom command |
+| `zrevrange` | ZRANGE ... REV rank-range scans (~100 elements at a random offset, read from the high end) | ZADD preload | Custom command |
 | `zrandmember` | ZRANDMEMBER random sample of 100 members | ZADD preload | Custom command |
 | `zrem` | ZREM scattered deletes, paired 50/50 with ZADD so the set stays populated | ZADD preload | Custom command |
 | `zpop` | ZPOPMIN sliding window, paired with a ZADD append from a much larger namespace | ZADD preload | Custom command |
+| `zpopmax` | ZPOPMAX from the top, paired with a ZADD append from a much larger namespace | ZADD preload | Custom command |
+| `zremrangebyscore` | ZREMRANGEBYSCORE of a width-1 score window, paired with a random ZADD (set settles near half the keyspace, like `zrem`) | ZADD preload | Custom command |
+| `zremrangebyrank` | ZREMRANGEBYRANK at one fixed middle rank, paired with a ZADD append from a much larger namespace | ZADD preload | Custom command |
 | `sismember` | SISMEMBER set membership checks | SADD preload | Custom command |
 | `ping` | PING latency (no data) | None | `-t ping` |
 | `mget` | MGET multi-key reads (4 keys) | SET preload | Custom command |
 
+Sorted-set tests run on ONE sorted set (`myzset`). The ZADD preload runs `valkey-benchmark -t zadd --sequential -r 3000000 -n 3000000`, so the set holds 3,000,000 members `element:000000000000` to `element:000002999999`, and each member's score equals its number (dense scores 0 to 2,999,999). Two limits of the remove recipes: `zremrangebyrank` always removes at the same rank (a literal, because `valkey-benchmark` pads random numbers with zeros, which `ZREMRANGEBYRANK` rejects, and `__rand_beg__` cannot be used in a command sequence), so the upper tree levels stay warm in cache; and `zremrangebyscore` removes about one member per call at the start, then settles. The range recipes (`zrange`, `zrevrange`, `zrangebyscore`) use `--count` and `__rand_beg__`/`__rand_end__`, which only the `range-v1` generator profile has (neither `legacy-v1` nor `scalable-v2` does; a command that uses them there exits without a result). These tests select `range-v1` by themselves, and `queue add --generator-profile legacy-v1 --tests zrange` is refused. Use one generator profile for every engine in a comparison.
+
 All tests use `valkey-benchmark` under the hood. Tests marked "Custom command" use the `-- COMMAND arg1 arg2` syntax to execute arbitrary Valkey commands.
+
+## Access Modes for Sorted-Set Point Tests
+
+`queue add --access uniform|hotset` (default `uniform`) chooses which member each call touches. It applies to `zscore`, `zrank`, `zrevrank` and `zincrby`.
+
+- `uniform`: every member is equally likely.
+- `hotset`: each call group is a sequence of 10 commands. 8 go to 8 fixed members spread evenly over the keyspace, 2 go to a uniformly drawn member. This models a hot head. It is **not** a zipfian distribution.
+
+There is no zipfian mode because `valkey-benchmark` cannot draw one: its random placeholders are uniform, and `--sequential` is a counter. A real zipfian option needs a new placeholder in the generator (a patch to `valkey-benchmark`, pinned through a generator profile). Limits of `hotset`: no power-law tail, and the hot members are always the same. `valkey-benchmark` counts every command of a sequence, so the reported rate is commands per second in both modes, but the hot calls hit cache, so read a `hotset` rate as the effect of skew on this one generator, not as a zipfian result. Results are marked `access` in the metadata and are not comparable with sweep history.
+
+## Older Redis Releases
+
+The sweep floor (`SweepEngine.floor_tag`, 8.0.0 for Redis) only bounds the commit range that the sweep enumerates. An ad hoc task does not read it, so an older release can be built and measured with the usual flags, for example `conductress queue add --source redis --specifier 7.2.9 --tests zscore`. The specifier is any branch, tag or commit of the `redis` repository.
 
 ## Key-Size Feature
 

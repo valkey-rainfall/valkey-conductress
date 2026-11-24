@@ -42,6 +42,7 @@ class GeneratorProfile:
     commit_sha: str  # full 40-hex SHA
     build_args: str = ""  # extra ``make`` arguments (after ``make -j``)
     binary_name: str = "valkey-benchmark"  # produced binary filename
+    features: tuple[str, ...] = ()  # generator capabilities a test command may need (see FEATURE_RANGE)
 
     @property
     def install_dir(self) -> Path:
@@ -77,11 +78,68 @@ SCALABLE_V2 = GeneratorProfile(
     binary_name="valkey-benchmark",
 )
 
+# Range mode: --count and the __rand_beg__/__rand_end__ placeholders (rank or score windows
+# for ZRANGE, ZRANGEBYSCORE and similar). Neither legacy-v1 nor scalable-v2 has them: a test
+# command that uses them makes those generators exit without a result.
+FEATURE_RANGE = "range"
+
+RANGE_V1 = GeneratorProfile(
+    name="range-v1",
+    repo_url="https://github.com/valkey-rainfall/valkey.git",
+    commit_sha="cbc0ae1bfe9410db0abb94f0c7893c5d783ec6af",
+    build_args="",
+    binary_name="valkey-benchmark",
+    features=(FEATURE_RANGE,),
+)
+
 # Registry: name -> profile
 PROFILES: Dict[str, GeneratorProfile] = {
     LEGACY_V1.name: LEGACY_V1,
     SCALABLE_V2.name: SCALABLE_V2,
+    RANGE_V1.name: RANGE_V1,
 }
+
+# The profile a test with range placeholders gets when the task names none. Use one profile
+# for every engine in a comparison: the generator is part of the workload.
+DEFAULT_RANGE_PROFILE = RANGE_V1.name
+
+_RANGE_MARKERS = ("__rand_beg__", "__rand_end__")
+
+
+def required_generator_features(command: str) -> frozenset[str]:
+    """Generator capabilities a valkey-benchmark test command needs."""
+    needs = set()
+    if any(marker in command for marker in _RANGE_MARKERS) or "--count" in command.split():
+        needs.add(FEATURE_RANGE)
+    return frozenset(needs)
+
+
+def effective_generator_profile(command: str, requested: str) -> str:
+    """Return the generator profile to run ``command`` with.
+
+    A command without special needs keeps ``requested`` (empty = the legacy default). A command
+    that needs a capability gets the default profile that has it when none was requested, and is
+    refused when the requested profile lacks it: running it would only fail at once with
+    "No results recorded".
+    """
+    needs = required_generator_features(command)
+    if not needs:
+        return requested
+    if not requested:
+        return DEFAULT_RANGE_PROFILE
+    try:
+        profile = get_profile(requested)
+    except KeyError as exc:
+        raise ValueError(str(exc.args[0])) from exc
+    missing = sorted(needs - set(profile.features))
+    if missing:
+        have = sorted(name for name, p in PROFILES.items() if set(needs) <= set(p.features))
+        raise ValueError(
+            f"generator profile {requested!r} lacks {', '.join(missing)} support needed by the test command; "
+            f"use one of: {', '.join(have)}"
+        )
+    return requested
+
 
 DEFAULT_PROFILE = LEGACY_V1.name
 

@@ -10,11 +10,13 @@ from hypothesis import strategies as st
 
 from conductress import config
 from conductress.tasks.task_perf_benchmark import (
+    ACCESS_MODES,
     BASE_KEY_PATTERN,
     BASE_KEY_SIZE,
     CanaryPerfTaskData,
     PerfTaskData,
     PerfTaskRunner,
+    apply_access_mode,
     compute_aggregated_stats,
     generate_padded_key,
 )
@@ -236,10 +238,10 @@ class TestZsetBatteryTests:
         # Append namespace must dwarf the resident keyspace to bound the drain.
         assert entry.keyspace > config.PERF_BENCH_KEYSPACE * 100
 
-    def test_only_zpop_overrides_keyspace(self):
-        """No other test overrides the timed keyspace (they share PERF_BENCH_KEYSPACE)."""
+    def test_only_append_pairs_override_keyspace(self):
+        """Only the append-and-pop pairs override the timed keyspace (the rest share PERF_BENCH_KEYSPACE)."""
         overriding = {name for name, t in PerfTaskRunner.tests.items() if t.keyspace is not None}
-        assert overriding == {"zpop"}
+        assert overriding == {"zpop", "zpopmax", "zremrangebyrank"}
 
 
 class TestBatchedLookupRecipes:
@@ -975,3 +977,201 @@ class TestStorePerfCounters:
         detailed: dict = {}
         runner._store_perf_counters(detailed, {"all": {"cycles": 20}, "main": {}, "io": {}})
         assert "perf_counters_scope" not in detailed
+
+
+NEW_ZSET_TESTS = {
+    "zrevrank": " -- ZREVRANK myzset element:__rand_int__",
+    "zmscore": " -- ZMSCORE myzset " + " ".join(["element:__rand_int__"] * 8),
+    "zrevrange": "--count 100 -- ZRANGE myzset __rand_beg__ __rand_end__ REV",
+    "zcard": " -- ZCARD myzset",
+    "zpopmax": " -- ZPOPMAX myzset ';' ZADD myzset __rand_int__ nm:__rand_int__",
+    "zremrangebyscore": (
+        " -- ZADD myzset __rand_int__ element:__rand_int__ ';' ZREMRANGEBYSCORE myzset __rand_1st__ __rand_1st__"
+    ),
+    "zremrangebyrank": (
+        " -- ZADD myzset __rand_int__ nm:__rand_int__ ';' ZREMRANGEBYRANK myzset "
+        f"{config.PERF_BENCH_KEYSPACE // 2} {config.PERF_BENCH_KEYSPACE // 2}"
+    ),
+}
+
+
+class TestZsetBreadthTests:
+    """Sorted-set recipes added for the engine comparison (tier 2)."""
+
+    @pytest.mark.parametrize("name", sorted(NEW_ZSET_TESTS))
+    def test_recipe_uses_the_standard_zadd_preload(self, name):
+        entry = PerfTaskRunner.tests[name]
+        assert entry.name == name
+        assert entry.preload_command == "-t zadd"
+        assert entry.test_command == NEW_ZSET_TESTS[name]
+
+    def test_zmscore_draws_eight_independent_members(self):
+        assert PerfTaskRunner.tests["zmscore"].test_command.count("element:__rand_int__") == 8
+
+    def test_sequences_avoid_placeholders_that_cannot_be_used_in_a_sequence(self):
+        """__rand_beg__/__rand_end__ are rejected inside a ';' sequence by valkey-benchmark, and a
+        zero-padded random number is rejected by ZREMRANGEBYRANK, so the rank recipe uses a literal."""
+        for name, entry in PerfTaskRunner.tests.items():
+            if " ';' " in entry.test_command:
+                assert "__rand_beg__" not in entry.test_command, name
+                assert "__rand_end__" not in entry.test_command, name
+        rank = PerfTaskRunner.tests["zremrangebyrank"].test_command
+        assert "ZREMRANGEBYRANK myzset __rand" not in rank
+
+    def test_remove_pairs_keep_the_set_populated(self):
+        """Each remove recipe pairs the delete with an add in the same request."""
+        for name in ("zpopmax", "zremrangebyscore", "zremrangebyrank"):
+            assert "ZADD myzset" in PerfTaskRunner.tests[name].test_command, name
+        # appends that must never collide with the resident members use the wide namespace
+        for name in ("zpopmax", "zremrangebyrank"):
+            assert "nm:__rand_int__" in PerfTaskRunner.tests[name].test_command
+            assert PerfTaskRunner.tests[name].keyspace == PerfTaskRunner.ZPOP_APPEND_KEYSPACE
+
+    @pytest.mark.parametrize("name", sorted(NEW_ZSET_TESTS))
+    def test_padded_key_variant_replaces_the_key_name(self, name):
+        padded_key = generate_padded_key(64)
+        runner = _make_runner(name, key_size=64)
+        assert runner.preload_command == f" -- ZADD {padded_key} __rand_int__ element:__rand_int__"
+        assert padded_key in runner.test_command
+        assert "myzset" not in runner.test_command
+        # the padded form keeps the same shape as the plain form
+        assert runner.test_command == NEW_ZSET_TESTS[name].replace("myzset", padded_key)
+
+
+class TestAccessMode:
+    """Member access modes for the sorted-set point tests."""
+
+    def test_modes_are_uniform_and_hotset_only(self):
+        """valkey-benchmark has no zipfian option, so there is no zipf mode."""
+        assert ACCESS_MODES == ("uniform", "hotset")
+
+    def test_uniform_is_unchanged(self):
+        test = PerfTaskRunner.tests["zscore"]
+        assert apply_access_mode(test, test.test_command, "uniform", 3_000_000) == test.test_command
+
+    def test_hotset_shape(self):
+        test = PerfTaskRunner.tests["zscore"]
+        command = apply_access_mode(test, test.test_command, "hotset", 3_000_000)
+        assert command.startswith(" -- ZSCORE myzset ")
+        calls = command[len(" -- ") :].split(" ';' ")
+        assert len(calls) == 10
+        assert calls[:8] == [f"ZSCORE myzset element:{n:012d}" for n in (187500 + i * 375000 for i in range(8))]
+        assert calls[8:] == ["ZSCORE myzset element:__rand_int__"] * 2
+        # every hot member exists in the standard preload
+        assert all(int(c.rsplit(":", 1)[1]) < 3_000_000 for c in calls[:8])
+
+    def test_hotset_follows_the_keyspace(self):
+        test = PerfTaskRunner.tests["zrank"]
+        command = apply_access_mode(test, test.test_command, "hotset", 800)
+        assert all(int(c.rsplit(":", 1)[1]) < 800 for c in command[4:].split(" ';' ")[:8])
+
+    @pytest.mark.parametrize("name", ["zscore", "zrank", "zrevrank", "zincrby"])
+    def test_supported_tests_build(self, name):
+        test = PerfTaskRunner.tests[name]
+        assert test.hotset
+        assert apply_access_mode(test, test.test_command, "hotset", 3_000_000).count(" ';' ") == 9
+
+    @pytest.mark.parametrize("name", ["zadd", "zmscore", "zrange", "zcard", "zrem", "zpop", "get"])
+    def test_unsupported_tests_are_refused(self, name):
+        test = PerfTaskRunner.tests[name]
+        assert not test.hotset
+        with pytest.raises(ValueError, match="does not support"):
+            apply_access_mode(test, test.test_command, "hotset", 3_000_000)
+
+    def test_unknown_mode_is_refused(self):
+        test = PerfTaskRunner.tests["zscore"]
+        for mode in ("zipf", "zipfian", ""):
+            with pytest.raises(ValueError, match="access must be one of"):
+                apply_access_mode(test, test.test_command, mode, 3_000_000)
+
+    def test_runner_applies_the_mode_to_the_timed_command_only(self):
+        task = _make_perf_task_data(test="zscore", access="hotset")
+        runner = task.prepare_task_runner([])
+        assert runner.access == "hotset"
+        assert runner.test_command.count(" ';' ") == 9
+        assert runner.preload_command == "-t zadd"
+
+    def test_runner_with_padded_key(self):
+        padded_key = generate_padded_key(64)
+        runner = PerfTaskRunner(
+            task_name="unit_test",
+            server_infos=[],
+            binary_source="manual",
+            specifier="test",
+            io_threads=1,
+            valsize=64,
+            pipelining=1,
+            test="zrank",
+            warmup=1,
+            duration=1,
+            preload_keys=True,
+            has_expire=False,
+            make_args="",
+            key_size=64,
+            access="hotset",
+        )
+        assert runner.test_command.count(padded_key) == 10
+
+    def test_default_is_uniform(self):
+        task = _make_perf_task_data(test="zscore")
+        assert task.access == "uniform"
+        assert task.prepare_task_runner([]).test_command == PerfTaskRunner.tests["zscore"].test_command
+
+    def test_unsupported_test_fails_when_the_runner_is_built(self):
+        with pytest.raises(ValueError, match="does not support"):
+            _make_perf_task_data(test="zadd", access="hotset").prepare_task_runner([])
+
+
+class TestRangeGeneratorSelection:
+    """Range tests (zrange, zrangebyscore, zrevrange) run on the range generator."""
+
+    @pytest.mark.parametrize("name", ["zrange", "zrangebyscore", "zrevrange"])
+    def test_range_tests_select_the_range_profile(self, name):
+        runner = _make_perf_task_data(test=name).prepare_task_runner([])
+        assert runner.generator_profile == "range-v1"
+        assert "--count 100" in runner.test_command
+
+    @pytest.mark.parametrize("name", ["zrange", "zrangebyscore", "zrevrange"])
+    def test_padded_key_variant_selects_it_too(self, name):
+        assert _make_runner(name, key_size=64).generator_profile == "range-v1"
+
+    @pytest.mark.parametrize("name", ["zscore", "zrank", "zrem", "zpop", "get", "zmscore", "zremrangebyscore"])
+    def test_other_tests_keep_the_default_generator(self, name):
+        assert _make_perf_task_data(test=name).prepare_task_runner([]).generator_profile == ""
+        assert _make_perf_task_data(test=name, generator_profile="scalable-v2").prepare_task_runner(
+            []
+        ).generator_profile == ("scalable-v2")
+
+    @pytest.mark.parametrize("profile", ["legacy-v1", "scalable-v2"])
+    def test_range_test_with_a_profile_lacking_range_mode_is_refused(self, profile):
+        with pytest.raises(ValueError, match="lacks range support"):
+            _make_perf_task_data(test="zrange", generator_profile=profile).prepare_task_runner([])
+
+    def test_explicit_range_profile_is_kept(self):
+        task = _make_perf_task_data(test="zrangebyscore", generator_profile="range-v1")
+        assert task.prepare_task_runner([]).generator_profile == "range-v1"
+
+    def test_bench_binary_override_keeps_precedence(self):
+        """An absolute binary override is the caller's choice and is not second-guessed."""
+        task = _make_perf_task_data(test="zrange", bench_binary="/opt/custom/valkey-benchmark")
+        assert task.prepare_task_runner([]).generator_profile == ""
+
+    def test_timed_command_uses_the_range_binary(self, monkeypatch):
+        """The benchmark command runs the binary of the selected profile."""
+        from conductress import generator_profiles
+
+        seen = []
+
+        def fake_resolve(generator_profile="", bench_binary_override=""):
+            seen.append(generator_profile)
+            return "/generators/range-v1/valkey-benchmark", {"generator_profile": generator_profile}
+
+        monkeypatch.setattr(generator_profiles, "resolve_bench_binary", fake_resolve)
+        runner = _make_perf_task_data(test="zrange").prepare_task_runner([])
+        client = MagicMock()
+        client.ip = "127.0.0.1"
+        client._cpu_allocator.get_net_interface_numa.return_value = 0
+        command = runner._build_benchmark_command(client, "127.0.0.1", None)
+        assert seen == ["range-v1"]
+        assert "/generators/range-v1/valkey-benchmark" in command
+        assert "--count 100 -- ZRANGE myzset __rand_beg__ __rand_end__" in command

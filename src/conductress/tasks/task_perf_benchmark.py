@@ -26,6 +26,7 @@ from conductress.config import (
 )
 from conductress.cpu_allocator import AllocationTag
 from conductress.file_protocol import BenchmarkResults, BenchmarkStatus, MetricData
+from conductress.generator_profiles import effective_generator_profile
 from conductress.memory_capture import (
     MemorySampler,
     collect_memory_after,
@@ -113,6 +114,54 @@ def should_stop_adaptive(per_run_rps: list[float], rep: int, min_reps: int, targ
     return bool((ci_95 / mean_rps) * 100 <= target_cv)
 
 
+ACCESS_MODES = ("uniform", "hotset")
+HOTSET_MEMBERS = 8  # fixed members that receive most calls
+HOTSET_HOT_CALLS = 8  # of every 10 commands in a request, this many go to the hot members
+HOTSET_COLD_CALLS = 2  # and this many to a uniformly drawn member
+_MEMBER_PLACEHOLDER = "element:__rand_int__"
+
+
+def apply_access_mode(test: "PerfTaskRunner.Test", command: str, access: str, keyspace: int) -> str:
+    """Return the timed command for an access mode.
+
+    "uniform" is the plain command (every member equally likely).
+
+    "hotset" is NOT a zipfian distribution. valkey-benchmark only draws uniform
+    random numbers (or a sequential counter), so a power-law tail cannot be made
+    without changing the generator. "hotset" is the part that can be made with
+    the stock generator: each request is a sequence of 10 commands, 8 aimed at
+    HOTSET_MEMBERS fixed members spread evenly over the keyspace and 2 at a
+    uniformly drawn member (so 80 percent of the calls hit 8 members). Limits:
+      * there is no tail, only a hot head and a flat remainder;
+      * each request is 10 commands in a fixed order, and valkey-benchmark counts
+        every command of a sequence, so requests per second is commands per
+        second; the hot calls are cheaper to serve than the cold ones (cache
+        hits), so compare hotset runs with each other and with uniform runs
+        only with that in mind;
+      * the hot members are always the same ones.
+    """
+    if access not in ACCESS_MODES:
+        raise ValueError(f"access must be one of {ACCESS_MODES}, got {access!r}")
+    if access == "uniform":
+        return command
+    if not test.hotset:
+        raise ValueError(f"test {test.name!r} does not support access mode 'hotset'")
+    if command.count(_MEMBER_PLACEHOLDER) != 1 or ";" in command:
+        raise ValueError(f"cannot build a hotset command from {command!r}")
+    hot = [
+        command.replace(
+            _MEMBER_PLACEHOLDER, f"element:{(i * keyspace) // HOTSET_MEMBERS + keyspace // (2 * HOTSET_MEMBERS):012d}"
+        )
+        for i in range(HOTSET_MEMBERS)
+    ]
+    head, _, _ = command.partition("--")
+    prefix = head + "-- "
+    bodies = [c.split("-- ", 1)[1] for c in hot]
+    hot_calls = [bodies[i % HOTSET_MEMBERS] for i in range(HOTSET_HOT_CALLS)]
+    cold_calls = [command.split("-- ", 1)[1]] * HOTSET_COLD_CALLS
+    return prefix + " ';' ".join(hot_calls + cold_calls)
+
+
 @dataclass
 class PerfTaskData(BaseTaskData):
     """data class for performance benchmark task"""
@@ -145,6 +194,8 @@ class PerfTaskData(BaseTaskData):
     bench_binary: str = ""  # expert: absolute path to an alternative benchmark binary. The client
     # is part of the workload definition, so results from an overridden binary are NOT comparable
     # with sweep history; the override is recorded in result metadata. Empty = repo default.
+    access: str = "uniform"  # member access mode for sorted-set tests: "uniform" or "hotset" (see
+    # hotset_command). valkey-benchmark has no zipfian option, so there is no "zipf" value.
     generator_profile: str = ""  # named generator profile (e.g. "legacy-v1", "scalable-v2").
     # When set, overrides the default bench_binary resolution with a profile-managed binary.
     # Empty = legacy behavior (PROJECT_ROOT/valkey-benchmark from VALKEY_BENCHMARK_COMMIT).
@@ -195,6 +246,7 @@ class PerfTaskData(BaseTaskData):
             client_netns=self.client_netns,
             bench_binary=self.bench_binary,
             generator_profile=self.generator_profile,
+            access=self.access,
         )
 
 
@@ -228,6 +280,10 @@ class PerfTaskRunner(BaseTaskRunner):
         # during measurement (needed by zpop, whose append must draw from a
         # namespace far larger than the resident set to avoid draining it).
         keyspace: Optional[int] = None
+        # True when the command names exactly one random member as
+        # ``element:__rand_int__`` and nothing else random, so the "hotset"
+        # access mode can aim most calls at a few fixed members.
+        hotset: bool = False
 
     # Append namespace for the zpop sliding-window test. ZPOPMIN never misses,
     # so a 50/50 pop/append drains with time-constant = append-keyspace (in
@@ -235,6 +291,11 @@ class PerfTaskRunner(BaseTaskRunner):
     # the ~3M resident set from draining more than ~25%, so it never empties and
     # ZPOPMIN (O(1)) throughput stays representative.
     ZPOP_APPEND_KEYSPACE = 2_000_000_000
+
+    # Eight independently drawn members for the zmscore recipe.
+    ZSET_MEMBERS_8 = " ".join(["element:__rand_int__"] * 8)
+    # Middle rank of the standard preload, used by the zremrangebyrank recipe.
+    ZREMRANGE_MID_RANK = PERF_BENCH_KEYSPACE // 2
 
     # Shared pieces of the batched-lookup recipes (see the httl*/geo* entries).
     # Field TTL is one week so nothing expires during a run.
@@ -266,11 +327,26 @@ class PerfTaskRunner(BaseTaskRunner):
             name="zincrby",
             preload_command="-t zadd",
             test_command=" -- ZINCRBY myzset 1 element:__rand_int__",
+            hotset=True,
         ),
         "zrank": Test(
             name="zrank",
             preload_command="-t zadd",
             test_command=" -- ZRANK myzset element:__rand_int__",
+            hotset=True,
+        ),
+        "zrevrank": Test(
+            name="zrevrank",
+            preload_command="-t zadd",
+            test_command=" -- ZREVRANK myzset element:__rand_int__",
+            hotset=True,
+        ),
+        # Batched score lookup: 8 members per call, each drawn independently
+        # (every __rand_int__ in one command gets its own value).
+        "zmscore": Test(
+            name="zmscore",
+            preload_command="-t zadd",
+            test_command=f" -- ZMSCORE myzset {ZSET_MEMBERS_8}",
         ),
         "zcount": Test(
             name="zcount",
@@ -281,6 +357,13 @@ class PerfTaskRunner(BaseTaskRunner):
             name="zscore",
             preload_command="-t zadd",
             test_command=" -- ZSCORE myzset element:__rand_int__",
+            hotset=True,
+        ),
+        # O(1) size read: a control that touches no member.
+        "zcard": Test(
+            name="zcard",
+            preload_command="-t zadd",
+            test_command=" -- ZCARD myzset",
         ),
         # Scattered range scan of ~100 elements at a random rank offset. --count
         # activates __rand_beg__/__rand_end__ (end = beg + count - 1).
@@ -295,6 +378,12 @@ class PerfTaskRunner(BaseTaskRunner):
             name="zrangebyscore",
             preload_command="-t zadd",
             test_command="--count 100 -- ZRANGEBYSCORE myzset __rand_beg__ __rand_end__",
+        ),
+        # Reverse rank-range scan: same window as zrange, read from the high end.
+        "zrevrange": Test(
+            name="zrevrange",
+            preload_command="-t zadd",
+            test_command="--count 100 -- ZRANGE myzset __rand_beg__ __rand_end__ REV",
         ),
         # Random-sample read of 100 members (literal COUNT arg; no placeholder).
         "zrandmember": Test(
@@ -320,6 +409,43 @@ class PerfTaskRunner(BaseTaskRunner):
             name="zpop",
             preload_command="-t zadd",
             test_command=" -- ZPOPMIN myzset ';' ZADD myzset __rand_int__ nm:__rand_int__",
+            keyspace=ZPOP_APPEND_KEYSPACE,
+        ),
+        # Hot-spot delete from the top: the mirror of zpop. ZPOPMAX removes the
+        # highest score; the appended member gets a random score from the same
+        # wide namespace, so the set size stays constant.
+        "zpopmax": Test(
+            name="zpopmax",
+            preload_command="-t zadd",
+            test_command=" -- ZPOPMAX myzset ';' ZADD myzset __rand_int__ nm:__rand_int__",
+            keyspace=ZPOP_APPEND_KEYSPACE,
+        ),
+        # Range delete by score. Scores are drawn per call, so a width-1 window
+        # removes the members that carry exactly that score (about one at the
+        # start). Like zrem it is a birth-death pair over the preload keyspace
+        # and settles near K/2. The same value is used for both bounds
+        # (__rand_1st__), because __rand_beg__ cannot be used in a sequence.
+        "zremrangebyscore": Test(
+            name="zremrangebyscore",
+            preload_command="-t zadd",
+            test_command=(
+                " -- ZADD myzset __rand_int__ element:__rand_int__ ';' ZREMRANGEBYSCORE myzset __rand_1st__ __rand_1st__"
+            ),
+        ),
+        # Range delete by rank at ONE fixed rank (the middle of the preload).
+        # Limit: the rank is a literal, because valkey-benchmark pads every
+        # random number to 12 digits and ZREMRANGEBYRANK rejects leading zeros,
+        # and __rand_beg__ cannot be used in a sequence. The same tree path is
+        # walked on every call, so the upper tree levels stay warm in cache.
+        # The ZADD appends a new member from the wide namespace each call, so
+        # the set size stays constant. Assumes the default preload keyspace.
+        "zremrangebyrank": Test(
+            name="zremrangebyrank",
+            preload_command="-t zadd",
+            test_command=(
+                f" -- ZADD myzset __rand_int__ nm:__rand_int__ ';' ZREMRANGEBYRANK myzset "
+                f"{ZREMRANGE_MID_RANK} {ZREMRANGE_MID_RANK}"
+            ),
             keyspace=ZPOP_APPEND_KEYSPACE,
         ),
         "sismember": Test(
@@ -440,6 +566,7 @@ class PerfTaskRunner(BaseTaskRunner):
         bench_binary: str = "",
         generator_profile: str = "",
         topology: Optional[TopologySpec] = None,
+        access: str = "uniform",
     ):
         super().__init__(task_name)
 
@@ -482,7 +609,7 @@ class PerfTaskRunner(BaseTaskRunner):
         self.bench_binary = bench_binary
         # Generator profile: when set, resolves bench_binary via the profile
         # system at execution time. bench_binary override takes precedence.
-        self.generator_profile = generator_profile
+        self.generator_profile = generator_profile  # finalized below, once the timed command is known
         self._generator_provenance: dict = {}  # populated at resolve time
 
         self.perf_stat_enabled = perf_stat_enabled
@@ -511,6 +638,16 @@ class PerfTaskRunner(BaseTaskRunner):
             self.preload_command = self.test.preload_command
             self.test_command = self.test.test_command
 
+        self.access = access
+        if access != "uniform" and self.test_command is not None:
+            self.test_command = apply_access_mode(self.test, self.test_command, access, self.keyspace)
+
+        # A command that needs range mode (--count, __rand_beg__) only works with a generator
+        # that has it. Pick one, or refuse a profile that lacks it. An explicit bench_binary
+        # overrides the profile and is the caller's responsibility.
+        if self.test_command is not None and not self.bench_binary:
+            self.generator_profile = effective_generator_profile(self.test_command, self.generator_profile)
+
         self.title = (
             f"{test} throughput, {binary_source}:{specifier}, io-threads={io_threads}, "
             f"pipelining={pipelining}, size={HumanByte.to_human(valsize)}, "
@@ -519,6 +656,8 @@ class PerfTaskRunner(BaseTaskRunner):
         )
         if self.key_size > 0:
             self.title += f", key-size={HumanByte.to_human(self.key_size)}"
+        if self.access != "uniform":
+            self.title += f", access={self.access}"
         if self.perf_stat_enabled:
             self.title += ", perf-stat"
 
@@ -556,6 +695,13 @@ class PerfTaskRunner(BaseTaskRunner):
                 "xrange": f" -- XADD {padded_key} MAXLEN ~ 1000 * f __rand_field__",
                 "ping": None,
                 "zrank": f" -- ZADD {padded_key} __rand_int__ element:__rand_int__",
+                "zrevrank": f" -- ZADD {padded_key} __rand_int__ element:__rand_int__",
+                "zmscore": f" -- ZADD {padded_key} __rand_int__ element:__rand_int__",
+                "zcard": f" -- ZADD {padded_key} __rand_int__ element:__rand_int__",
+                "zrevrange": f" -- ZADD {padded_key} __rand_int__ element:__rand_int__",
+                "zpopmax": f" -- ZADD {padded_key} __rand_int__ element:__rand_int__",
+                "zremrangebyscore": f" -- ZADD {padded_key} __rand_int__ element:__rand_int__",
+                "zremrangebyrank": f" -- ZADD {padded_key} __rand_int__ element:__rand_int__",
                 "zcount": f" -- ZADD {padded_key} __rand_int__ element:__rand_int__",
                 "zscore": f" -- ZADD {padded_key} __rand_int__ element:__rand_int__",
                 "zrange": f" -- ZADD {padded_key} __rand_int__ element:__rand_int__",
@@ -588,6 +734,19 @@ class PerfTaskRunner(BaseTaskRunner):
                 "xrange": f" -- XRANGE {padded_key} - + COUNT 100",
                 "ping": "-t ping",
                 "zrank": f" -- ZRANK {padded_key} element:__rand_int__",
+                "zrevrank": f" -- ZREVRANK {padded_key} element:__rand_int__",
+                "zmscore": f" -- ZMSCORE {padded_key} {self.ZSET_MEMBERS_8}",
+                "zcard": f" -- ZCARD {padded_key}",
+                "zrevrange": f"--count 100 -- ZRANGE {padded_key} __rand_beg__ __rand_end__ REV",
+                "zpopmax": f" -- ZPOPMAX {padded_key} ';' ZADD {padded_key} __rand_int__ nm:__rand_int__",
+                "zremrangebyscore": (
+                    f" -- ZADD {padded_key} __rand_int__ element:__rand_int__ ';' "
+                    f"ZREMRANGEBYSCORE {padded_key} __rand_1st__ __rand_1st__"
+                ),
+                "zremrangebyrank": (
+                    f" -- ZADD {padded_key} __rand_int__ nm:__rand_int__ ';' "
+                    f"ZREMRANGEBYRANK {padded_key} {self.ZREMRANGE_MID_RANK} {self.ZREMRANGE_MID_RANK}"
+                ),
                 "zcount": f" -- ZCOUNT {padded_key} __rand_int__ __rand_int__",
                 "zscore": f" -- ZSCORE {padded_key} element:__rand_int__",
                 "zrange": f"--count 100 -- ZRANGE {padded_key} __rand_beg__ __rand_end__",
@@ -689,6 +848,7 @@ class PerfTaskRunner(BaseTaskRunner):
                 "size": self.valsize,
                 "key_size": self.key_size,
                 "keyspace": self.keyspace,
+                "access": self.access,
                 "seed": self.seed,
                 "preload_keys": self.preload_keys,
                 "perf_stat_enabled": self.perf_stat_enabled,
@@ -743,6 +903,7 @@ class PerfTaskRunner(BaseTaskRunner):
                 "size": self.valsize,
                 "key_size": self.key_size,
                 "keyspace": self.keyspace,
+                "access": self.access,
                 "seed": self.seed,
                 "preload_keys": self.preload_keys,
                 "perf_stat_enabled": self.perf_stat_enabled,
