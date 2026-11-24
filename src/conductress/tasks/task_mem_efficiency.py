@@ -8,7 +8,7 @@ from collections import deque
 from collections.abc import Awaitable, Callable, Coroutine
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, Sequence
 
 import plotext as plt
 
@@ -47,7 +47,7 @@ SETTLE_REL_EPS = 0.001  # 0.1%: consecutive samples this close count as "stable"
 SETTLE_MAX_SECONDS = 180.0
 
 
-def _window_stable(samples: "list[int]", rel_eps: float) -> bool:
+def _window_stable(samples: "Sequence[float]", rel_eps: float) -> bool:
     """True if the spread (max-min) across `samples` is within `rel_eps` of the mean.
 
     A windowed criterion (rather than pairwise consecutive deltas) absorbs bounded
@@ -140,6 +140,126 @@ async def settle_rehash(
         await touch_fn()
         passes += 1
     return passes
+
+
+# Error text of DEBUG HTSTATS-KEY when the key's value is not a hash table (a different
+# encoding, such as a tree or a compact list). Matched case-insensitively on this phrase
+# only; every other error still fails the task.
+NOT_HASHTABLE_TEXT = "not represented using hash table"
+KEY_CHECK_HASHTABLE = "hashtable"
+KEY_CHECK_NOT_HASHTABLE = "not_hashtable"
+
+
+def is_not_hashtable(stats: Optional[str]) -> bool:
+    """True if DEBUG HTSTATS-KEY answered that the key is not stored as a hash table."""
+    return stats is not None and stats.startswith("ERR") and NOT_HASHTABLE_TEXT in stats.lower()
+
+
+async def settle_rehash_for_key(
+    key_stats_fn: Callable[[], Awaitable[Optional[str]]],
+    keyspace_stats_fn: Callable[[], Awaitable[Optional[str]]],
+    touch_fn: Callable[[], Awaitable[int]],
+    *,
+    max_passes: int = SETTLE_REHASH_MAX_PASSES,
+) -> tuple[int, str]:
+    """Settle the rehash of a collection key; return (read passes, key check).
+
+    If the key is a hash table, this is `settle_rehash` on its stats and the key check is
+    "hashtable". If the engine stores the key in another encoding, there is no key-level
+    rehash to wait for: the key check is "not_hashtable" and only the keyspace table
+    (DEBUG HTSTATS 0) is settled. Any other DEBUG error still raises.
+    """
+    first = await key_stats_fn()
+    if is_not_hashtable(first):
+        return await settle_rehash(keyspace_stats_fn, touch_fn, max_passes=max_passes), KEY_CHECK_NOT_HASHTABLE
+    unread = [first]  # reuse the reading we already have, so a settled key still costs one DEBUG call
+
+    async def _stats() -> Optional[str]:
+        return unread.pop() if unread else await key_stats_fn()
+
+    return await settle_rehash(_stats, touch_fn, max_passes=max_passes), KEY_CHECK_HASHTABLE
+
+
+# --- Engine-neutral memory stability check (part of `settle`) -------------------
+# DEBUG HTSTATS only exists for hash tables, so it cannot tell that a different encoding
+# (or a background reclaim) has finished. After the read pass, poll the numbers every engine
+# reports -- INFO used_memory, plus any MEMORY STATS field about hash table or rehash overhead
+# the engine has -- until they stop moving. Defaults keep a task short: one sample a second,
+# 3 consecutive stable readings (4 samples within 0.1% of each other), give up after 60 s.
+SETTLE_STABILITY_INTERVAL_S = 1.0
+SETTLE_STABILITY_SAMPLES = 3
+SETTLE_STABILITY_REL_EPS = 0.001
+SETTLE_STABILITY_MAX_SECONDS = 60.0
+STABILITY_STABLE = "stable"
+STABILITY_TIMEOUT = "timeout"
+
+
+def parse_memory_stats_rehash_fields(text: Optional[str]) -> dict[str, float]:
+    """Numeric MEMORY STATS fields about hash table or rehash overhead, from valkey-cli raw output.
+
+    The output is name and value on alternating lines, with nested maps (per database) flattened
+    in between, so a line counts as a name only when the next line is a number. Engines without
+    such fields give an empty dict.
+    """
+    fields: dict[str, float] = {}
+    lines = [line.strip() for line in (text or "").splitlines() if line.strip()]
+    i = 0
+    while i + 1 < len(lines):
+        name, value = lines[i], lines[i + 1]
+        try:
+            number = float(value)
+        except ValueError:
+            i += 1
+            continue
+        lowered = name.lower()
+        if "rehash" in lowered or lowered.startswith("overhead.hashtable"):
+            fields[name] = number
+        i += 2
+    return fields
+
+
+async def check_memory_stability(
+    sample_fn: Callable[[], Awaitable[dict[str, float]]],
+    *,
+    interval: float = SETTLE_STABILITY_INTERVAL_S,
+    stable_samples: int = SETTLE_STABILITY_SAMPLES,
+    rel_eps: float = SETTLE_STABILITY_REL_EPS,
+    max_seconds: float = SETTLE_STABILITY_MAX_SECONDS,
+    sleep_fn: Callable[[float], Awaitable[None]] = asyncio.sleep,
+) -> dict[str, Any]:
+    """Poll `sample_fn` (name -> number) until every series is stable; return a record.
+
+    Stable means the last `stable_samples + 1` samples of each series (every series the samples
+    share) stay within `rel_eps` of their mean. The record has the verdict ("stable" or
+    "timeout"), every sample, the series names and the elapsed seconds. A timeout is recorded,
+    not raised: the caller decides what an unsettled measurement means.
+    """
+    samples: list[dict[str, float]] = [await sample_fn()]
+    elapsed = 0.0
+    verdict = STABILITY_TIMEOUT
+    window = stable_samples + 1
+    while True:
+        recent = samples[-window:]
+        if len(recent) == window:
+            names = set(recent[0]).intersection(*recent[1:])
+            if names and all(_window_stable([r[n] for r in recent], rel_eps) for n in names):
+                verdict = STABILITY_STABLE
+                break
+        if elapsed >= max_seconds:
+            break
+        await sleep_fn(interval)
+        elapsed += interval
+        samples.append(await sample_fn())
+    return {
+        "verdict": verdict,
+        "elapsed_s": elapsed,
+        "series": sorted(set().union(*samples)),
+        "samples": samples,
+        "interval_s": interval,
+        "stable_samples": stable_samples,
+        "rel_eps": rel_eps,
+        "max_seconds": max_seconds,
+    }
 
 
 @dataclass
@@ -381,6 +501,8 @@ class MemTaskRunner(BaseTaskRunner):
             # Opt-in: let background memory reclamation (e.g. zset compaction) settle
             # so we sample steady-state memory rather than the post-populate transient.
             rehash_passes: Optional[int] = None
+            settle_key_check: Optional[str] = None
+            settle_stability: Optional[dict[str, Any]] = None
             if self.settle:
 
                 async def _sample_used_memory() -> int:
@@ -399,11 +521,19 @@ class MemTaskRunner(BaseTaskRunner):
                 async def _stats() -> Optional[str]:
                     return await valkey.run_valkey_command(htstats_command(self.test))
 
+                async def _keyspace_stats() -> Optional[str]:
+                    return await valkey.run_valkey_command("DEBUG HTSTATS 0")
+
                 async def _touch() -> int:
                     return await asyncio.to_thread(touch, valkey.ip, valkey.port, workload)
 
-                rehash_passes = await settle_rehash(_stats, _touch)
-                self.logger.info("Rehash settled after %d read pass(es) (port %d)", rehash_passes, port)
+                rehash_passes, settle_key_check = await settle_rehash_for_key(_stats, _keyspace_stats, _touch)
+                self.logger.info(
+                    "Rehash settled after %d read pass(es), key check %s (port %d)",
+                    rehash_passes,
+                    settle_key_check,
+                    port,
+                )
                 if rehash_passes:
                     # Completing a rehash frees the old table; let the sample catch up.
                     settled_bytes, settle_secs = await quiesce_until_stable(_sample_used_memory)
@@ -413,6 +543,37 @@ class MemTaskRunner(BaseTaskRunner):
                         settle_secs,
                         port,
                     )
+
+            if self.settle:
+                # Engine-neutral last check: used_memory (and any hash table overhead fields
+                # MEMORY STATS reports) must have stopped moving.
+                memory_stats_available = True
+
+                async def _sample_stability() -> dict[str, float]:
+                    nonlocal memory_stats_available
+                    info = await valkey.info("memory")
+                    sample = {"used_memory": float(info["used_memory"])}
+                    if memory_stats_available:
+                        try:
+                            fields = parse_memory_stats_rehash_fields(await valkey.run_valkey_command("MEMORY STATS"))
+                        except Exception:  # an engine without MEMORY STATS: skip quietly from now on
+                            fields = {}
+                        if fields:
+                            sample.update(fields)
+                        else:
+                            memory_stats_available = False
+                    return sample
+
+                settle_stability = await check_memory_stability(_sample_stability)
+                self.logger.info(
+                    "Memory stability: %s after %.0fs, %d sample(s) (port %d)",
+                    settle_stability["verdict"],
+                    settle_stability["elapsed_s"],
+                    len(settle_stability["samples"]),
+                    port,
+                )
+                if settle_stability["verdict"] != STABILITY_STABLE:
+                    self.logger.warning("used_memory was still moving at the timeout (port %d)", port)
 
             after_memory: dict[str, str] = await valkey.info("memory")
 
@@ -492,6 +653,8 @@ class MemTaskRunner(BaseTaskRunner):
                 "per_item_overhead": per_item_overhead,
                 "settled": self.settle,
                 "rehash_passes": rehash_passes,
+                "settle_key_check": settle_key_check,
+                "settle_stability": settle_stability,
                 "breakdown": breakdown,
                 "raw_stacks": raw_stacks,
             }
