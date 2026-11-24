@@ -13,7 +13,7 @@ from . import config
 from .cachecannon import DEFAULT_CACHECANNON_BINARY
 from .fleet_client import FleetClientError
 from .task_queue import BaseTaskData, TaskQueue
-from .tasks.task_perf_benchmark import PerfTaskData
+from .tasks.task_perf_benchmark import PerfTaskData, PerfTaskRunner
 from .tasks.task_replica_read import (
     DEFAULT_MAX_LAG_SECONDS,
     DEFAULT_MAX_LAG_SLOPE,
@@ -308,6 +308,15 @@ def _add_perf_args(parser: argparse.ArgumentParser) -> None:
         "A small value builds a hot, cache-resident data set; pair it with --server-args that "
         "disable compact encodings (for example '--hash-max-listpack-entries 0') when the test "
         "needs hashtable encoding. Recorded in result metadata; NOT sweep-comparable.",
+    )
+    parser.add_argument(
+        "--access",
+        choices=["uniform", "hotset"],
+        default="uniform",
+        help="Member access pattern for sorted-set point tests (zscore, zrank, zrevrank, zincrby). "
+        "'uniform' (default) draws members evenly. 'hotset' sends 8 of every 10 commands to 8 fixed "
+        "members. It is NOT zipfian: valkey-benchmark has no zipf option, so there is no power-law "
+        "tail, and the hot members are always the same. Recorded in result metadata; NOT sweep-comparable.",
     )
     parser.add_argument(
         "--client-netns",
@@ -1305,6 +1314,12 @@ def handle_queue_add(args: argparse.Namespace) -> int:
         print("Error: --keyspace must not be negative", file=sys.stderr)
         return 1
 
+    if args.access != "uniform":
+        unsupported = [t for t in tests if t not in PerfTaskRunner.tests or not PerfTaskRunner.tests[t].hotset]
+        if unsupported:
+            print(f"Error: --access {args.access} does not support test(s): {', '.join(unsupported)}", file=sys.stderr)
+            return 1
+
     # Validate CPU override syntax (reject malformed, don't validate topology)
     try:
         validate_cpulist(args.server_cpus)
@@ -1347,6 +1362,7 @@ def handle_queue_add(args: argparse.Namespace) -> int:
             keyspace=args.keyspace,
             client_netns=args.client_netns,
             bench_binary=args.bench_binary,
+            access=args.access,
         )
         queue.submit_task(task)
 
@@ -1366,6 +1382,8 @@ def handle_queue_add(args: argparse.Namespace) -> int:
         print(f"  bench-threads={args.bench_threads or 'default'} bench-clients={args.bench_clients or 'default'}")
     if args.keyspace:
         print(f"  keyspace: {args.keyspace} (NOT sweep-comparable)")
+    if args.access != "uniform":
+        print(f"  access: {args.access} (NOT sweep-comparable)")
     if args.client_netns:
         print(f"  client-netns: {args.client_netns} (real-NIC hairpin path)")
     if args.bench_binary:
