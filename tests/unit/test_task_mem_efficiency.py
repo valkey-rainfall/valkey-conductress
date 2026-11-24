@@ -741,6 +741,12 @@ class TestSettleRehashForKey:
 
         assert is_not_hashtable(NOT_HASHTABLE_REPLY)
         assert is_not_hashtable(NOT_HASHTABLE_REPLY.upper())
+        # the exact reply of a release build says "an hash table"; older text had no article
+        assert is_not_hashtable("ERR The value stored at the specified key is not represented using an hash table")
+        assert is_not_hashtable("ERR The value stored at the specified key is not represented using hash table")
+        assert is_not_hashtable("ERR The value is not represented using a hash table")
+        assert not is_not_hashtable("The value stored at the specified key is not represented using an hash table")
+        assert not is_not_hashtable("ERR value is represented using a hash table")
         assert not is_not_hashtable("ERR DEBUG command not allowed")
         assert not is_not_hashtable("ERR no such key")
         assert not is_not_hashtable(self.DONE)  # a real stats text is never an error
@@ -753,10 +759,10 @@ class TestSettleRehashForKey:
         key_stats = self._calls([NOT_HASHTABLE_REPLY])
         keyspace_stats = self._calls([self.DONE])
         touches = {"n": 0}
-        passes, key_check = await settle_rehash_for_key(
+        passes, key_check, encoding = await settle_rehash_for_key(
             key_stats, keyspace_stats, TestSettleRehash._counting_touch(touches)
         )
-        assert (passes, key_check) == (0, "not_hashtable")
+        assert (passes, key_check, encoding) == (0, "not_hashtable", None)
         assert keyspace_stats.state["i"] == 1  # DEBUG HTSTATS 0 was read
         assert touches["n"] == 0
 
@@ -766,10 +772,10 @@ class TestSettleRehashForKey:
 
         keyspace_stats = self._calls([self.MID, self.DONE])
         touches = {"n": 0}
-        passes, key_check = await settle_rehash_for_key(
+        passes, key_check, encoding = await settle_rehash_for_key(
             self._calls([NOT_HASHTABLE_REPLY]), keyspace_stats, TestSettleRehash._counting_touch(touches)
         )
-        assert (passes, key_check) == (1, "not_hashtable")
+        assert (passes, key_check, encoding) == (1, "not_hashtable", None)
         assert touches["n"] == 1
 
     @pytest.mark.asyncio
@@ -779,15 +785,105 @@ class TestSettleRehashForKey:
         touches = {"n": 0}
         keyspace_stats = self._calls([self.DONE])
         key_stats = self._calls([self.MID, self.MID, self.DONE])
-        passes, key_check = await settle_rehash_for_key(
+        passes, key_check, encoding = await settle_rehash_for_key(
             key_stats,
             keyspace_stats,
             TestSettleRehash._counting_touch(touches),
         )
-        assert (passes, key_check) == (2, "hashtable")
+        assert (passes, key_check, encoding) == (2, "hashtable", None)
         assert touches["n"] == 2
         assert keyspace_stats.state["i"] == 0  # unchanged behavior: only the key table is checked
         assert key_stats.state["i"] == 3  # three readings, none repeated
+
+    @staticmethod
+    def _encoding(reply):
+        async def _fn():
+            return reply
+
+        return _fn
+
+    @pytest.mark.parametrize("reply", ["btree", "listpack", "intset", '"btree"', "BTREE\n", "listpackex"])
+    @pytest.mark.asyncio
+    async def test_non_hashtable_encoding_skips_the_key_check(self, reply):
+        from conductress.tasks.task_mem_efficiency import settle_rehash_for_key
+
+        key_stats = self._calls(["ERR the key-level check must not run"])
+        keyspace_stats = self._calls([self.DONE])
+        passes, key_check, encoding = await settle_rehash_for_key(
+            key_stats,
+            keyspace_stats,
+            TestSettleRehash._counting_touch({"n": 0}),
+            encoding_fn=self._encoding(reply),
+        )
+        assert (passes, key_check) == (0, "not_hashtable")
+        assert encoding == reply.strip().strip('"').lower()
+        assert key_stats.state["i"] == 0  # DEBUG HTSTATS-KEY was never asked
+        assert keyspace_stats.state["i"] == 1  # the keyspace is still checked
+
+    @pytest.mark.asyncio
+    async def test_non_hashtable_encoding_still_waits_for_a_rehashing_keyspace(self):
+        from conductress.tasks.task_mem_efficiency import settle_rehash_for_key
+
+        touches = {"n": 0}
+        passes, key_check, encoding = await settle_rehash_for_key(
+            self._calls(["unused"]),
+            self._calls([self.MID, self.DONE]),
+            TestSettleRehash._counting_touch(touches),
+            encoding_fn=self._encoding("btree"),
+        )
+        assert (passes, key_check, encoding) == (1, "not_hashtable", "btree")
+        assert touches["n"] == 1
+
+    @pytest.mark.parametrize("reply", ["skiplist", "hashtable"])
+    @pytest.mark.asyncio
+    async def test_hashtable_encoding_runs_the_key_check_and_records_the_encoding(self, reply):
+        from conductress.tasks.task_mem_efficiency import settle_rehash_for_key
+
+        key_stats = self._calls([self.MID, self.DONE])
+        passes, key_check, encoding = await settle_rehash_for_key(
+            key_stats,
+            self._calls([self.DONE]),
+            TestSettleRehash._counting_touch({"n": 0}),
+            encoding_fn=self._encoding(reply),
+        )
+        assert (passes, key_check, encoding) == (1, "hashtable", reply)
+
+    @pytest.mark.parametrize("reply", [None, "", "ERR no such key", "(nil)", "some new encoding"])
+    @pytest.mark.asyncio
+    async def test_unreadable_encoding_falls_back_to_the_key_check(self, reply):
+        from conductress.tasks.task_mem_efficiency import settle_rehash_for_key
+
+        key_stats = self._calls([NOT_HASHTABLE_REPLY])
+        passes, key_check, encoding = await settle_rehash_for_key(
+            key_stats,
+            self._calls([self.DONE]),
+            TestSettleRehash._counting_touch({"n": 0}),
+            encoding_fn=self._encoding(reply),
+        )
+        assert (passes, key_check, encoding) == (0, "not_hashtable", None)
+        assert key_stats.state["i"] == 1
+
+    @pytest.mark.asyncio
+    async def test_unknown_encoding_name_is_recorded_and_the_key_check_decides(self):
+        from conductress.tasks.task_mem_efficiency import settle_rehash_for_key
+
+        key_stats = self._calls([self.DONE])
+        passes, key_check, encoding = await settle_rehash_for_key(
+            key_stats,
+            self._calls([self.DONE]),
+            TestSettleRehash._counting_touch({"n": 0}),
+            encoding_fn=self._encoding("newtree"),
+        )
+        assert (passes, key_check, encoding) == (0, "hashtable", "newtree")
+        assert key_stats.state["i"] == 1
+
+    def test_normalize_encoding(self):
+        from conductress.tasks.task_mem_efficiency import normalize_encoding
+
+        assert normalize_encoding("skiplist") == "skiplist"
+        assert normalize_encoding(' "BTree" \n') == "btree"
+        for bad in (None, "", "   ", "ERR no such key", "(nil)", "(error) ERR x", "two words"):
+            assert normalize_encoding(bad) is None
 
     @pytest.mark.asyncio
     async def test_key_that_never_settles_still_fails(self):
@@ -929,6 +1025,34 @@ class TestMemoryStability:
             "overhead.hashtable.main": 2048.0,  # the nested per-db value, same name, read last
             "overhead.hashtable.expires": 0.0,
             "rehashing.bytes": 512.5,
+        }
+
+    def test_memory_stats_parser_reads_the_rehash_fields_of_a_tree_engine(self):
+        """Field names seen in MEMORY STATS of a release with a tree sorted set; values made up."""
+        from conductress.tasks.task_mem_efficiency import parse_memory_stats_rehash_fields
+
+        text = "\n".join(
+            [
+                "keys.count",
+                "1",
+                "overhead.db.hashtable.rehashing",
+                "1024",
+                "db.dict.rehashing.count",
+                "0",
+                "db.0",
+                "overhead.hashtable.main",
+                "56",
+                "overhead.hashtable.expires",
+                "0",
+                "allocator.allocated",
+                "999999",
+            ]
+        )
+        assert parse_memory_stats_rehash_fields(text) == {
+            "overhead.db.hashtable.rehashing": 1024.0,
+            "db.dict.rehashing.count": 0.0,
+            "overhead.hashtable.main": 56.0,
+            "overhead.hashtable.expires": 0.0,
         }
 
     def test_memory_stats_parser_returns_nothing_for_other_engines(self):

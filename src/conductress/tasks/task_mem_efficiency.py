@@ -3,6 +3,7 @@
 import asyncio
 import datetime
 import logging
+import re
 import time
 from collections import deque
 from collections.abc import Awaitable, Callable, Coroutine
@@ -143,16 +144,34 @@ async def settle_rehash(
 
 
 # Error text of DEBUG HTSTATS-KEY when the key's value is not a hash table (a different
-# encoding, such as a tree or a compact list). Matched case-insensitively on this phrase
-# only; every other error still fails the task.
-NOT_HASHTABLE_TEXT = "not represented using hash table"
+# encoding, such as a tree or a compact list). Seen in the wild: "not represented using
+# hash table" and "not represented using an hash table". Matched case-insensitively on the
+# stable part, with or without an article; every other error still fails the task.
+NOT_HASHTABLE_RE = re.compile(r"not represented using\s+(?:an?\s+|the\s+)?hash\s*table", re.IGNORECASE)
 KEY_CHECK_HASHTABLE = "hashtable"
 KEY_CHECK_NOT_HASHTABLE = "not_hashtable"
+
+# OBJECT ENCODING answers, asked before DEBUG HTSTATS-KEY. Only these are decided up front:
+# a hash table (a skiplist set keeps one) is checked, a compact or tree encoding has no
+# key-level table to wait for. An encoding in neither list is not guessed: the key-level
+# check runs and its error reply decides.
+HASHTABLE_ENCODINGS = frozenset({"hashtable", "skiplist"})
+NON_HASHTABLE_ENCODINGS = frozenset({"listpack", "listpackex", "intset", "btree", "quicklist"})
 
 
 def is_not_hashtable(stats: Optional[str]) -> bool:
     """True if DEBUG HTSTATS-KEY answered that the key is not stored as a hash table."""
-    return stats is not None and stats.startswith("ERR") and NOT_HASHTABLE_TEXT in stats.lower()
+    return stats is not None and stats.startswith("ERR") and NOT_HASHTABLE_RE.search(stats) is not None
+
+
+def normalize_encoding(reply: Optional[str]) -> Optional[str]:
+    """The encoding name from an OBJECT ENCODING reply, or None if the reply is not a name."""
+    if reply is None:
+        return None
+    name = reply.strip().strip('"').strip().lower()
+    if not name or name.startswith("err") or name.startswith("(") or " " in name:
+        return None
+    return name
 
 
 async def settle_rehash_for_key(
@@ -160,24 +179,35 @@ async def settle_rehash_for_key(
     keyspace_stats_fn: Callable[[], Awaitable[Optional[str]]],
     touch_fn: Callable[[], Awaitable[int]],
     *,
+    encoding_fn: Optional[Callable[[], Awaitable[Optional[str]]]] = None,
     max_passes: int = SETTLE_REHASH_MAX_PASSES,
-) -> tuple[int, str]:
-    """Settle the rehash of a collection key; return (read passes, key check).
+) -> tuple[int, str, Optional[str]]:
+    """Settle the rehash of a collection key; return (read passes, key check, key encoding).
 
-    If the key is a hash table, this is `settle_rehash` on its stats and the key check is
-    "hashtable". If the engine stores the key in another encoding, there is no key-level
-    rehash to wait for: the key check is "not_hashtable" and only the keyspace table
+    First ask OBJECT ENCODING (if `encoding_fn` is given). An encoding that is not hash table
+    based (listpack, btree, ...) has no key-level rehash to wait for. Otherwise run DEBUG
+    HTSTATS-KEY: a hash table is settled with `settle_rehash` (key check "hashtable"), and the
+    reply "not represented using a hash table" gives the same result as a skipped key. When the
+    key has no key-level table the key check is "not_hashtable" and only the keyspace table
     (DEBUG HTSTATS 0) is settled. Any other DEBUG error still raises.
     """
+    encoding = normalize_encoding(await encoding_fn()) if encoding_fn else None
+    if encoding in NON_HASHTABLE_ENCODINGS:
+        passes = await settle_rehash(keyspace_stats_fn, touch_fn, max_passes=max_passes)
+        return passes, KEY_CHECK_NOT_HASHTABLE, encoding
     first = await key_stats_fn()
     if is_not_hashtable(first):
-        return await settle_rehash(keyspace_stats_fn, touch_fn, max_passes=max_passes), KEY_CHECK_NOT_HASHTABLE
+        return (
+            await settle_rehash(keyspace_stats_fn, touch_fn, max_passes=max_passes),
+            KEY_CHECK_NOT_HASHTABLE,
+            encoding,
+        )
     unread = [first]  # reuse the reading we already have, so a settled key still costs one DEBUG call
 
     async def _stats() -> Optional[str]:
         return unread.pop() if unread else await key_stats_fn()
 
-    return await settle_rehash(_stats, touch_fn, max_passes=max_passes), KEY_CHECK_HASHTABLE
+    return await settle_rehash(_stats, touch_fn, max_passes=max_passes), KEY_CHECK_HASHTABLE, encoding
 
 
 # --- Engine-neutral memory stability check (part of `settle`) -------------------
@@ -502,6 +532,7 @@ class MemTaskRunner(BaseTaskRunner):
             # so we sample steady-state memory rather than the post-populate transient.
             rehash_passes: Optional[int] = None
             settle_key_check: Optional[str] = None
+            settle_key_encoding: Optional[str] = None
             settle_stability: Optional[dict[str, Any]] = None
             if self.settle:
 
@@ -527,11 +558,20 @@ class MemTaskRunner(BaseTaskRunner):
                 async def _touch() -> int:
                     return await asyncio.to_thread(touch, valkey.ip, valkey.port, workload)
 
-                rehash_passes, settle_key_check = await settle_rehash_for_key(_stats, _keyspace_stats, _touch)
+                async def _encoding() -> Optional[str]:
+                    return await valkey.run_valkey_command(f"OBJECT ENCODING {COLLECTION_KEYS[self.test]}")
+
+                rehash_passes, settle_key_check, settle_key_encoding = await settle_rehash_for_key(
+                    _stats,
+                    _keyspace_stats,
+                    _touch,
+                    encoding_fn=_encoding if self.test in COLLECTION_KEYS else None,
+                )
                 self.logger.info(
-                    "Rehash settled after %d read pass(es), key check %s (port %d)",
+                    "Rehash settled after %d read pass(es), key check %s, encoding %s (port %d)",
                     rehash_passes,
                     settle_key_check,
+                    settle_key_encoding,
                     port,
                 )
                 if rehash_passes:
@@ -654,6 +694,7 @@ class MemTaskRunner(BaseTaskRunner):
                 "settled": self.settle,
                 "rehash_passes": rehash_passes,
                 "settle_key_check": settle_key_check,
+                "settle_key_encoding": settle_key_encoding,
                 "settle_stability": settle_stability,
                 "breakdown": breakdown,
                 "raw_stacks": raw_stacks,
