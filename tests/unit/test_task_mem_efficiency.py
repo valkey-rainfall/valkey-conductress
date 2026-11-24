@@ -714,6 +714,362 @@ class TestSettleRehash:
         assert touches["n"] == 2
 
 
+NOT_HASHTABLE_REPLY = "ERR The value stored at the specified key is not represented using hash table"
+
+
+class TestSettleRehashForKey:
+    """A key stored in another encoding has no key-level rehash; the keyspace is still checked."""
+
+    DONE = TestSettleRehash.DICT_DONE
+    MID = TestSettleRehash.DICT_MID
+
+    @staticmethod
+    def _calls(values):
+        """An async stats function that records how often it was asked."""
+        state = {"i": 0}
+
+        async def _fn():
+            i = state["i"]
+            state["i"] = i + 1
+            return values[i] if i < len(values) else values[-1]
+
+        _fn.state = state
+        return _fn
+
+    def test_not_hashtable_reply_is_recognized(self):
+        from conductress.tasks.task_mem_efficiency import is_not_hashtable
+
+        assert is_not_hashtable(NOT_HASHTABLE_REPLY)
+        assert is_not_hashtable(NOT_HASHTABLE_REPLY.upper())
+        # the exact reply of a release build says "an hash table"; older text had no article
+        assert is_not_hashtable("ERR The value stored at the specified key is not represented using an hash table")
+        assert is_not_hashtable("ERR The value stored at the specified key is not represented using hash table")
+        assert is_not_hashtable("ERR The value is not represented using a hash table")
+        assert not is_not_hashtable("The value stored at the specified key is not represented using an hash table")
+        assert not is_not_hashtable("ERR value is represented using a hash table")
+        assert not is_not_hashtable("ERR DEBUG command not allowed")
+        assert not is_not_hashtable("ERR no such key")
+        assert not is_not_hashtable(self.DONE)  # a real stats text is never an error
+        assert not is_not_hashtable(None)
+
+    @pytest.mark.asyncio
+    async def test_not_hashtable_key_checks_the_keyspace_and_records_it(self):
+        from conductress.tasks.task_mem_efficiency import settle_rehash_for_key
+
+        key_stats = self._calls([NOT_HASHTABLE_REPLY])
+        keyspace_stats = self._calls([self.DONE])
+        touches = {"n": 0}
+        passes, key_check, encoding = await settle_rehash_for_key(
+            key_stats, keyspace_stats, TestSettleRehash._counting_touch(touches)
+        )
+        assert (passes, key_check, encoding) == (0, "not_hashtable", None)
+        assert keyspace_stats.state["i"] == 1  # DEBUG HTSTATS 0 was read
+        assert touches["n"] == 0
+
+    @pytest.mark.asyncio
+    async def test_not_hashtable_key_still_waits_for_a_rehashing_keyspace(self):
+        from conductress.tasks.task_mem_efficiency import settle_rehash_for_key
+
+        keyspace_stats = self._calls([self.MID, self.DONE])
+        touches = {"n": 0}
+        passes, key_check, encoding = await settle_rehash_for_key(
+            self._calls([NOT_HASHTABLE_REPLY]), keyspace_stats, TestSettleRehash._counting_touch(touches)
+        )
+        assert (passes, key_check, encoding) == (1, "not_hashtable", None)
+        assert touches["n"] == 1
+
+    @pytest.mark.asyncio
+    async def test_still_rehashing_key_is_read_until_done(self):
+        from conductress.tasks.task_mem_efficiency import settle_rehash_for_key
+
+        touches = {"n": 0}
+        keyspace_stats = self._calls([self.DONE])
+        key_stats = self._calls([self.MID, self.MID, self.DONE])
+        passes, key_check, encoding = await settle_rehash_for_key(
+            key_stats,
+            keyspace_stats,
+            TestSettleRehash._counting_touch(touches),
+        )
+        assert (passes, key_check, encoding) == (2, "hashtable", None)
+        assert touches["n"] == 2
+        assert keyspace_stats.state["i"] == 0  # unchanged behavior: only the key table is checked
+        assert key_stats.state["i"] == 3  # three readings, none repeated
+
+    @staticmethod
+    def _encoding(reply):
+        async def _fn():
+            return reply
+
+        return _fn
+
+    @pytest.mark.parametrize("reply", ["btree", "listpack", "intset", '"btree"', "BTREE\n", "listpackex"])
+    @pytest.mark.asyncio
+    async def test_non_hashtable_encoding_skips_the_key_check(self, reply):
+        from conductress.tasks.task_mem_efficiency import settle_rehash_for_key
+
+        key_stats = self._calls(["ERR the key-level check must not run"])
+        keyspace_stats = self._calls([self.DONE])
+        passes, key_check, encoding = await settle_rehash_for_key(
+            key_stats,
+            keyspace_stats,
+            TestSettleRehash._counting_touch({"n": 0}),
+            encoding_fn=self._encoding(reply),
+        )
+        assert (passes, key_check) == (0, "not_hashtable")
+        assert encoding == reply.strip().strip('"').lower()
+        assert key_stats.state["i"] == 0  # DEBUG HTSTATS-KEY was never asked
+        assert keyspace_stats.state["i"] == 1  # the keyspace is still checked
+
+    @pytest.mark.asyncio
+    async def test_non_hashtable_encoding_still_waits_for_a_rehashing_keyspace(self):
+        from conductress.tasks.task_mem_efficiency import settle_rehash_for_key
+
+        touches = {"n": 0}
+        passes, key_check, encoding = await settle_rehash_for_key(
+            self._calls(["unused"]),
+            self._calls([self.MID, self.DONE]),
+            TestSettleRehash._counting_touch(touches),
+            encoding_fn=self._encoding("btree"),
+        )
+        assert (passes, key_check, encoding) == (1, "not_hashtable", "btree")
+        assert touches["n"] == 1
+
+    @pytest.mark.parametrize("reply", ["skiplist", "hashtable"])
+    @pytest.mark.asyncio
+    async def test_hashtable_encoding_runs_the_key_check_and_records_the_encoding(self, reply):
+        from conductress.tasks.task_mem_efficiency import settle_rehash_for_key
+
+        key_stats = self._calls([self.MID, self.DONE])
+        passes, key_check, encoding = await settle_rehash_for_key(
+            key_stats,
+            self._calls([self.DONE]),
+            TestSettleRehash._counting_touch({"n": 0}),
+            encoding_fn=self._encoding(reply),
+        )
+        assert (passes, key_check, encoding) == (1, "hashtable", reply)
+
+    @pytest.mark.parametrize("reply", [None, "", "ERR no such key", "(nil)", "some new encoding"])
+    @pytest.mark.asyncio
+    async def test_unreadable_encoding_falls_back_to_the_key_check(self, reply):
+        from conductress.tasks.task_mem_efficiency import settle_rehash_for_key
+
+        key_stats = self._calls([NOT_HASHTABLE_REPLY])
+        passes, key_check, encoding = await settle_rehash_for_key(
+            key_stats,
+            self._calls([self.DONE]),
+            TestSettleRehash._counting_touch({"n": 0}),
+            encoding_fn=self._encoding(reply),
+        )
+        assert (passes, key_check, encoding) == (0, "not_hashtable", None)
+        assert key_stats.state["i"] == 1
+
+    @pytest.mark.asyncio
+    async def test_unknown_encoding_name_is_recorded_and_the_key_check_decides(self):
+        from conductress.tasks.task_mem_efficiency import settle_rehash_for_key
+
+        key_stats = self._calls([self.DONE])
+        passes, key_check, encoding = await settle_rehash_for_key(
+            key_stats,
+            self._calls([self.DONE]),
+            TestSettleRehash._counting_touch({"n": 0}),
+            encoding_fn=self._encoding("newtree"),
+        )
+        assert (passes, key_check, encoding) == (0, "hashtable", "newtree")
+        assert key_stats.state["i"] == 1
+
+    def test_normalize_encoding(self):
+        from conductress.tasks.task_mem_efficiency import normalize_encoding
+
+        assert normalize_encoding("skiplist") == "skiplist"
+        assert normalize_encoding(' "BTree" \n') == "btree"
+        for bad in (None, "", "   ", "ERR no such key", "(nil)", "(error) ERR x", "two words"):
+            assert normalize_encoding(bad) is None
+
+    @pytest.mark.asyncio
+    async def test_key_that_never_settles_still_fails(self):
+        from conductress.tasks.task_mem_efficiency import settle_rehash_for_key
+
+        with pytest.raises(RuntimeError, match="still rehashing after 2"):
+            await settle_rehash_for_key(
+                self._calls([self.MID]),
+                self._calls([self.DONE]),
+                TestSettleRehash._counting_touch({"n": 0}),
+                max_passes=2,
+            )
+
+    @pytest.mark.asyncio
+    async def test_other_errors_still_fail_the_task(self):
+        from conductress.tasks.task_mem_efficiency import settle_rehash_for_key
+
+        for reply in ("ERR DEBUG command not allowed", "ERR no such key", None):
+            with pytest.raises(RuntimeError):
+                await settle_rehash_for_key(
+                    self._calls([reply]), self._calls([self.DONE]), TestSettleRehash._counting_touch({"n": 0})
+                )
+
+    @pytest.mark.asyncio
+    async def test_keyspace_error_in_the_not_hashtable_case_fails(self):
+        from conductress.tasks.task_mem_efficiency import settle_rehash_for_key
+
+        with pytest.raises(RuntimeError, match="DEBUG HTSTATS failed"):
+            await settle_rehash_for_key(
+                self._calls([NOT_HASHTABLE_REPLY]),
+                self._calls(["ERR DEBUG command not allowed"]),
+                TestSettleRehash._counting_touch({"n": 0}),
+            )
+
+
+async def _no_sleep(_seconds: float) -> None:
+    return None
+
+
+def _sampler(rows):
+    """An async sample function that replays `rows` (dicts), repeating the last one."""
+    state = {"i": 0}
+
+    async def _fn():
+        i = state["i"]
+        state["i"] = i + 1
+        return dict(rows[i] if i < len(rows) else rows[-1])
+
+    _fn.state = state
+    return _fn
+
+
+class TestMemoryStability:
+    """Engine-neutral check: used_memory (and any hash table overhead fields) must stop moving."""
+
+    @pytest.mark.asyncio
+    async def test_stable_sequence_ends_early_with_a_record(self):
+        from conductress.tasks.task_mem_efficiency import check_memory_stability
+
+        rows = [{"used_memory": v} for v in (1_000_000, 900_000, 800_500, 800_400, 800_450, 800_420)]
+        sample = _sampler(rows)
+        record = await check_memory_stability(sample, sleep_fn=_no_sleep)
+        assert record["verdict"] == "stable"
+        assert record["elapsed_s"] == 5.0  # 6 samples, one interval between each
+        assert record["samples"] == rows
+        assert record["series"] == ["used_memory"]
+        assert sample.state["i"] == 6  # stopped as soon as the window was stable
+
+    @pytest.mark.asyncio
+    async def test_unstable_sequence_times_out_and_is_recorded_not_raised(self):
+        from conductress.tasks.task_mem_efficiency import check_memory_stability
+
+        sample = _sampler([{"used_memory": 1_000_000 + 50_000 * i} for i in range(100)])
+        record = await check_memory_stability(sample, max_seconds=10.0, sleep_fn=_no_sleep)
+        assert record["verdict"] == "timeout"
+        assert record["elapsed_s"] == 10.0
+        assert len(record["samples"]) == 11
+
+    @pytest.mark.asyncio
+    async def test_slow_drift_is_not_called_stable(self):
+        """A creep below the per-sample threshold still adds up across the window."""
+        from conductress.tasks.task_mem_efficiency import check_memory_stability
+
+        sample = _sampler([{"used_memory": 1_000_000 + 700 * i} for i in range(100)])
+        record = await check_memory_stability(sample, max_seconds=8.0, sleep_fn=_no_sleep)
+        assert record["verdict"] == "timeout"
+
+    @pytest.mark.asyncio
+    async def test_an_overhead_field_that_still_moves_blocks_the_verdict(self):
+        from conductress.tasks.task_mem_efficiency import check_memory_stability
+
+        rows = [{"used_memory": 800_000, "overhead.hashtable.main": 1_000_000 - 100_000 * i} for i in range(5)]
+        rows += [{"used_memory": 800_000, "overhead.hashtable.main": 600_000}] * 10
+        record = await check_memory_stability(_sampler(rows), sleep_fn=_no_sleep)
+        assert record["verdict"] == "stable"
+        assert record["series"] == ["overhead.hashtable.main", "used_memory"]
+        assert record["elapsed_s"] == 7.0  # used_memory alone was stable from sample 3; the field only at sample 7
+
+    @pytest.mark.asyncio
+    async def test_engine_without_memory_stats_fields_uses_used_memory_only(self):
+        from conductress.tasks.task_mem_efficiency import check_memory_stability
+
+        record = await check_memory_stability(_sampler([{"used_memory": 5_000_000}]), sleep_fn=_no_sleep)
+        assert record["verdict"] == "stable"
+        assert record["series"] == ["used_memory"]
+        assert record["elapsed_s"] == 3.0
+
+    @pytest.mark.asyncio
+    async def test_a_field_that_disappears_does_not_break_the_check(self):
+        from conductress.tasks.task_mem_efficiency import check_memory_stability
+
+        rows = [{"used_memory": 7_000_000, "overhead.hashtable.main": 10}] + [{"used_memory": 7_000_000}] * 5
+        record = await check_memory_stability(_sampler(rows), sleep_fn=_no_sleep)
+        assert record["verdict"] == "stable"
+
+    def test_memory_stats_parser_keeps_only_hash_table_fields(self):
+        from conductress.tasks.task_mem_efficiency import parse_memory_stats_rehash_fields
+
+        text = "\n".join(
+            [
+                "peak.allocated",
+                "1000000",
+                "keys.count",
+                "3",
+                "overhead.hashtable.main",
+                "4096",
+                "db.0",
+                "overhead.hashtable.main",
+                "2048",
+                "overhead.hashtable.expires",
+                "0",
+                "rehashing.bytes",
+                "512.5",
+                "fragmentation",
+                "1.25",
+            ]
+        )
+        assert parse_memory_stats_rehash_fields(text) == {
+            "overhead.hashtable.main": 2048.0,  # the nested per-db value, same name, read last
+            "overhead.hashtable.expires": 0.0,
+            "rehashing.bytes": 512.5,
+        }
+
+    def test_memory_stats_parser_reads_the_rehash_fields_of_a_tree_engine(self):
+        """Field names seen in MEMORY STATS of a release with a tree sorted set; values made up."""
+        from conductress.tasks.task_mem_efficiency import parse_memory_stats_rehash_fields
+
+        text = "\n".join(
+            [
+                "keys.count",
+                "1",
+                "overhead.db.hashtable.rehashing",
+                "1024",
+                "db.dict.rehashing.count",
+                "0",
+                "db.0",
+                "overhead.hashtable.main",
+                "56",
+                "overhead.hashtable.expires",
+                "0",
+                "allocator.allocated",
+                "999999",
+            ]
+        )
+        assert parse_memory_stats_rehash_fields(text) == {
+            "overhead.db.hashtable.rehashing": 1024.0,
+            "db.dict.rehashing.count": 0.0,
+            "overhead.hashtable.main": 56.0,
+            "overhead.hashtable.expires": 0.0,
+        }
+
+    def test_memory_stats_parser_returns_nothing_for_other_engines(self):
+        from conductress.tasks.task_mem_efficiency import parse_memory_stats_rehash_fields
+
+        assert parse_memory_stats_rehash_fields("peak.allocated\n1000\nkeys.count\n3\nfragmentation\n1.1") == {}
+        assert parse_memory_stats_rehash_fields("") == {}
+        assert parse_memory_stats_rehash_fields(None) == {}
+        assert parse_memory_stats_rehash_fields("ERR unknown subcommand") == {}
+
+    def test_defaults_keep_a_task_short(self):
+        from conductress.tasks import task_mem_efficiency as m
+
+        assert m.SETTLE_STABILITY_INTERVAL_S * m.SETTLE_STABILITY_SAMPLES <= 5
+        assert m.SETTLE_STABILITY_MAX_SECONDS <= 60
+
+
 class TestTouchOps:
     """The settle read pass must look up every item by the fill's own naming."""
 
