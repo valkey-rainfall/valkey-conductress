@@ -352,6 +352,46 @@ class TestQueueAddSubcommand:
         assert "invalid choice" in capsys.readouterr().err
 
     @patch("conductress.cli.TaskQueue")
+    def test_queue_add_range_tests_get_the_range_generator(self, mock_queue_cls):
+        """Tests that need range mode select range-v1; the others keep the default generator."""
+        mock_queue = MagicMock()
+        mock_queue_cls.return_value = mock_queue
+
+        assert main(["queue", "add", "--source", "repo1", "--tests", "zrange,zrangebyscore,zrevrange,zscore"]) == 0
+
+        profiles = {c[0][0].test: c[0][0].generator_profile for c in mock_queue.submit_task.call_args_list}
+        assert profiles == {"zrange": "range-v1", "zrangebyscore": "range-v1", "zrevrange": "range-v1", "zscore": ""}
+
+    @patch("conductress.cli.TaskQueue")
+    def test_queue_add_generator_profile_passthrough(self, mock_queue_cls):
+        mock_queue = MagicMock()
+        mock_queue_cls.return_value = mock_queue
+
+        assert main(["queue", "add", "--source", "repo1", "--tests", "zscore", "--generator-profile", "range-v1"]) == 0
+        assert mock_queue.submit_task.call_args[0][0].generator_profile == "range-v1"
+
+    @patch("conductress.cli.TaskQueue")
+    def test_queue_add_refuses_range_test_with_a_profile_lacking_range_mode(self, mock_queue_cls, capsys):
+        for profile in ("legacy-v1", "scalable-v2"):
+            code = main(["queue", "add", "--source", "repo1", "--tests", "zrange", "--generator-profile", profile])
+            assert code == 1, profile
+        assert "lacks range support" in capsys.readouterr().err
+        mock_queue_cls.return_value.submit_task.assert_not_called()
+
+    def test_queue_add_unknown_generator_profile_is_rejected(self, capsys):
+        with pytest.raises(SystemExit):
+            main(["queue", "add", "--source", "repo1", "--tests", "zscore", "--generator-profile", "nope"])
+        assert "invalid choice" in capsys.readouterr().err
+
+    @patch("conductress.cli.TaskQueue")
+    def test_queue_add_bench_binary_skips_the_profile_choice(self, mock_queue_cls):
+        mock_queue = MagicMock()
+        mock_queue_cls.return_value = mock_queue
+
+        assert main(["queue", "add", "--source", "repo1", "--tests", "zrange", "--bench-binary", "/x/vb"]) == 0
+        assert mock_queue.submit_task.call_args[0][0].generator_profile == ""
+
+    @patch("conductress.cli.TaskQueue")
     def test_queue_add_older_redis_release_is_an_ordinary_ad_hoc_task(self, mock_queue_cls, monkeypatch):
         """The sweep floor (8.0.0) only bounds the sweep's commit range. An ad hoc task names any ref."""
         monkeypatch.setattr(config, "REPO_NAMES", ["valkey", "redis"])

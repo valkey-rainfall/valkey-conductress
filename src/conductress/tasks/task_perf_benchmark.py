@@ -26,6 +26,7 @@ from conductress.config import (
 )
 from conductress.cpu_allocator import AllocationTag
 from conductress.file_protocol import BenchmarkResults, BenchmarkStatus, MetricData
+from conductress.generator_profiles import effective_generator_profile
 from conductress.memory_capture import (
     MemorySampler,
     collect_memory_after,
@@ -608,7 +609,7 @@ class PerfTaskRunner(BaseTaskRunner):
         self.bench_binary = bench_binary
         # Generator profile: when set, resolves bench_binary via the profile
         # system at execution time. bench_binary override takes precedence.
-        self.generator_profile = generator_profile
+        self.generator_profile = generator_profile  # finalized below, once the timed command is known
         self._generator_provenance: dict = {}  # populated at resolve time
 
         self.perf_stat_enabled = perf_stat_enabled
@@ -640,6 +641,12 @@ class PerfTaskRunner(BaseTaskRunner):
         self.access = access
         if access != "uniform" and self.test_command is not None:
             self.test_command = apply_access_mode(self.test, self.test_command, access, self.keyspace)
+
+        # A command that needs range mode (--count, __rand_beg__) only works with a generator
+        # that has it. Pick one, or refuse a profile that lacks it. An explicit bench_binary
+        # overrides the profile and is the caller's responsibility.
+        if self.test_command is not None and not self.bench_binary:
+            self.generator_profile = effective_generator_profile(self.test_command, self.generator_profile)
 
         self.title = (
             f"{test} throughput, {binary_source}:{specifier}, io-threads={io_threads}, "

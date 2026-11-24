@@ -1120,3 +1120,58 @@ class TestAccessMode:
     def test_unsupported_test_fails_when_the_runner_is_built(self):
         with pytest.raises(ValueError, match="does not support"):
             _make_perf_task_data(test="zadd", access="hotset").prepare_task_runner([])
+
+
+class TestRangeGeneratorSelection:
+    """Range tests (zrange, zrangebyscore, zrevrange) run on the range generator."""
+
+    @pytest.mark.parametrize("name", ["zrange", "zrangebyscore", "zrevrange"])
+    def test_range_tests_select_the_range_profile(self, name):
+        runner = _make_perf_task_data(test=name).prepare_task_runner([])
+        assert runner.generator_profile == "range-v1"
+        assert "--count 100" in runner.test_command
+
+    @pytest.mark.parametrize("name", ["zrange", "zrangebyscore", "zrevrange"])
+    def test_padded_key_variant_selects_it_too(self, name):
+        assert _make_runner(name, key_size=64).generator_profile == "range-v1"
+
+    @pytest.mark.parametrize("name", ["zscore", "zrank", "zrem", "zpop", "get", "zmscore", "zremrangebyscore"])
+    def test_other_tests_keep_the_default_generator(self, name):
+        assert _make_perf_task_data(test=name).prepare_task_runner([]).generator_profile == ""
+        assert _make_perf_task_data(test=name, generator_profile="scalable-v2").prepare_task_runner(
+            []
+        ).generator_profile == ("scalable-v2")
+
+    @pytest.mark.parametrize("profile", ["legacy-v1", "scalable-v2"])
+    def test_range_test_with_a_profile_lacking_range_mode_is_refused(self, profile):
+        with pytest.raises(ValueError, match="lacks range support"):
+            _make_perf_task_data(test="zrange", generator_profile=profile).prepare_task_runner([])
+
+    def test_explicit_range_profile_is_kept(self):
+        task = _make_perf_task_data(test="zrangebyscore", generator_profile="range-v1")
+        assert task.prepare_task_runner([]).generator_profile == "range-v1"
+
+    def test_bench_binary_override_keeps_precedence(self):
+        """An absolute binary override is the caller's choice and is not second-guessed."""
+        task = _make_perf_task_data(test="zrange", bench_binary="/opt/custom/valkey-benchmark")
+        assert task.prepare_task_runner([]).generator_profile == ""
+
+    def test_timed_command_uses_the_range_binary(self, monkeypatch):
+        """The benchmark command runs the binary of the selected profile."""
+        from conductress import generator_profiles
+
+        seen = []
+
+        def fake_resolve(generator_profile="", bench_binary_override=""):
+            seen.append(generator_profile)
+            return "/generators/range-v1/valkey-benchmark", {"generator_profile": generator_profile}
+
+        monkeypatch.setattr(generator_profiles, "resolve_bench_binary", fake_resolve)
+        runner = _make_perf_task_data(test="zrange").prepare_task_runner([])
+        client = MagicMock()
+        client.ip = "127.0.0.1"
+        client._cpu_allocator.get_net_interface_numa.return_value = 0
+        command = runner._build_benchmark_command(client, "127.0.0.1", None)
+        assert seen == ["range-v1"]
+        assert "/generators/range-v1/valkey-benchmark" in command
+        assert "--count 100 -- ZRANGE myzset __rand_beg__ __rand_end__" in command

@@ -405,3 +405,98 @@ class TestSerialization:
         assert isinstance(task, PerfTaskData)
         assert task.generator_profile == ""
         assert task.topology == TopologySpec.standalone()
+
+
+# ---------------------------------------------------------------------------
+# Range mode: --count and __rand_beg__/__rand_end__ need a generator that has them
+# ---------------------------------------------------------------------------
+
+
+class TestRangeGenerator:
+    """A test command that uses range placeholders must run on a generator with range mode."""
+
+    def test_range_profile_is_registered(self):
+        from conductress.generator_profiles import DEFAULT_RANGE_PROFILE, FEATURE_RANGE, PROFILES, RANGE_V1
+
+        assert PROFILES["range-v1"] is RANGE_V1
+        assert DEFAULT_RANGE_PROFILE == "range-v1"
+        assert RANGE_V1.repo_url == "https://github.com/valkey-rainfall/valkey.git"
+        assert len(RANGE_V1.commit_sha) == 40
+        assert RANGE_V1.binary_name == "valkey-benchmark"
+        assert FEATURE_RANGE in RANGE_V1.features
+
+    def test_older_profiles_have_no_range_mode(self):
+        """Their valkey-benchmark.c has neither --count nor __rand_beg__."""
+        from conductress.generator_profiles import FEATURE_RANGE, LEGACY_V1, SCALABLE_V2
+
+        assert FEATURE_RANGE not in LEGACY_V1.features
+        assert FEATURE_RANGE not in SCALABLE_V2.features
+
+    @pytest.mark.parametrize(
+        "command,needs",
+        [
+            (" -- ZSCORE myzset element:__rand_int__", False),
+            ("-t zadd", False),
+            (" -- ZADD myzset __rand_int__ element:__rand_1st__ ';' ZREM myzset element:__rand_1st__", False),
+            ("--count 100 -- ZRANGE myzset __rand_beg__ __rand_end__", True),
+            (" -- ZRANGE myzset __rand_beg__ 99", True),
+            (" -- ZCOUNT myzset 0 __rand_end__", True),
+            ("--count 5 -- ZCARD myzset", True),
+            (" -- GET key:--count", False),
+        ],
+    )
+    def test_required_features(self, command, needs):
+        from conductress.generator_profiles import FEATURE_RANGE, required_generator_features
+
+        assert (FEATURE_RANGE in required_generator_features(command)) is needs
+
+    def test_unspecified_profile_gets_the_range_profile_only_when_needed(self):
+        from conductress.generator_profiles import effective_generator_profile
+
+        assert effective_generator_profile(" -- ZSCORE myzset element:__rand_int__", "") == ""
+        assert effective_generator_profile(" -- ZSCORE myzset element:__rand_int__", "scalable-v2") == "scalable-v2"
+        assert effective_generator_profile("--count 100 -- ZRANGE myzset __rand_beg__ __rand_end__", "") == "range-v1"
+        assert (
+            effective_generator_profile("--count 100 -- ZRANGE myzset __rand_beg__ __rand_end__", "range-v1")
+            == "range-v1"
+        )
+
+    @pytest.mark.parametrize("profile", ["legacy-v1", "scalable-v2"])
+    def test_profile_without_range_mode_is_refused(self, profile):
+        from conductress.generator_profiles import effective_generator_profile
+
+        with pytest.raises(ValueError, match="lacks range support") as err:
+            effective_generator_profile("--count 100 -- ZRANGE myzset __rand_beg__ __rand_end__", profile)
+        assert "range-v1" in str(err.value)
+
+    def test_unknown_profile_is_a_value_error(self):
+        from conductress.generator_profiles import effective_generator_profile
+
+        with pytest.raises(ValueError, match="Unknown generator profile"):
+            effective_generator_profile(" -- ZRANGE myzset __rand_beg__ 1", "nope")
+
+    def test_every_recipe_with_range_placeholders_is_guarded(self):
+        """Fails when a recipe (plain or padded-key form) uses range mode with a profile that lacks it,
+        and when it would run on a profile that has no range mode by default."""
+        from conductress.generator_profiles import (
+            FEATURE_RANGE,
+            PROFILES,
+            effective_generator_profile,
+            required_generator_features,
+        )
+        from conductress.tasks.task_perf_benchmark import PerfTaskRunner
+
+        lacking = [name for name, p in PROFILES.items() if FEATURE_RANGE not in p.features]
+        assert lacking, "the test needs at least one profile without range mode"
+        ranged = []
+        for name, test in PerfTaskRunner.tests.items():
+            for command in (test.test_command, test.preload_command or ""):
+                if FEATURE_RANGE not in required_generator_features(command):
+                    continue
+                ranged.append(name)
+                assert effective_generator_profile(command, "") == "range-v1", name
+                for profile in lacking:
+                    with pytest.raises(ValueError):
+                        effective_generator_profile(command, profile)
+        assert {"zrange", "zrangebyscore", "zrevrange"} <= set(ranged)
+        assert "zscore" not in ranged
