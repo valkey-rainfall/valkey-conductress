@@ -139,7 +139,8 @@ queued -> cancelled
 pending-approval -> queued        (approved)
 pending-approval -> cancelled     (rejected)
 queued | pending-approval -> cancelled          (caller cancels an unclaimed task)
-claimed | accepted -> cancel-requested          (an operator cancels an in-flight task)
+claimed -> cancelled                             (an operator cancels a claimed task; the runner's accept then fails)
+accepted -> cancel-requested                    (an operator cancels a running task; the runner stops it)
 ```
 
 `POST .../claim` is idempotent for a runner while its transfer lease is active: repeated requests return the same task and claim token. The runner persists the task locally, then sends the token to `POST .../accept`. No heartbeat or lease renewal occurs after acceptance.
@@ -169,7 +170,7 @@ GET  /api/v1/batches/{batch_id}    (tasks sharing a batch id)
 DELETE /api/v1/tasks/{selector}    (cancel a task or whole batch)
 ```
 
-`selector` is a task ID or a batch ID. Cancelling an unclaimed task (`queued` or `pending-approval`) cancels it outright; cancelling an in-flight task (`claimed` or `accepted`) marks it `cancel-requested`, and the runner stops at its next rep/cell boundary. Only an operator token may cancel another login's task or an in-flight one. Any other token cancels only its own tasks, and only while they are `queued` or `pending-approval`; the `owner` directory role gives no extra cancel power. The response has `tasks` (only the caller's own rows for a non-operator token), `changed`, and `skipped`: `not_yours` is a count of other logins' tasks that were left alone (their IDs are not shown) and `already_running` lists the caller's own tasks that an operator must cancel. The `conductress queue cancel|mine|pending|approve|reject` commands and `queue add* --batch` are thin clients over these routes.
+`selector` is a task ID or a batch ID. Cancelling an unclaimed task (`queued` or `pending-approval`) cancels it outright; cancelling a `claimed` task (not yet accepted by its runner) also cancels it outright, and the runner's accept fails with `TASK_NOT_CLAIMED`; cancelling an `accepted` (running) task marks it `cancel-requested`. A runner reads the state of its own tasks with `GET /api/v1/tasks/{id}` (its token gets `task_id`, `runner_id` and `state` only, and 404 for another runner's task) and checks it before each repetition of a benchmark. When it sees `cancel-requested` it stops, cleans up, and reports the task as `failed` with the error `TaskCancelled: cancelled by the operator`; the service stores the usage outcome `cancelled-running`. A task type without a repetition loop (memory efficiency) runs to its end. Only an operator token may cancel another login's task or an in-flight one. Any other token cancels only its own tasks, and only while they are `queued` or `pending-approval`; the `owner` directory role gives no extra cancel power. The response has `tasks` (only the caller's own rows for a non-operator token), `changed`, and `skipped`: `not_yours` is a count of other logins' tasks that were left alone (their IDs are not shown) and `already_running` lists the caller's own tasks that an operator must cancel. The `conductress queue cancel|mine|pending|approve|reject` commands and `queue add* --batch` are thin clients over these routes.
 
 ### Approval notification hook
 

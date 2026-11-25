@@ -258,6 +258,10 @@ class TaskRunner:
             raise RuntimeError(f"Task needs {server_count} configured server(s); servers.json has {len(servers)}.")
 
         task_runner: BaseTaskRunner = task_data.prepare_task_runner(servers[:server_count])
+        mailbox = self._mailbox
+        if mailbox is not None and mailbox.owns(task_data.task_id):
+            # A remote task asks the control service between repetitions whether it was cancelled.
+            task_runner.cancel_check = lambda: mailbox.cancel_requested(task_data.task_id)
         task_runner.file_protocol.server_environment = await self._server_environment(servers[0])
         # Pin this process to management cores for the task's duration when the
         # benchmark host is this machine (its CPU time is otherwise interference).

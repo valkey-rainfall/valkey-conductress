@@ -987,6 +987,7 @@ class PerfTaskRunner(BaseTaskRunner):
 
         try:
             for rep in range(effective_reps):
+                self.check_cancel()
                 # Between-rep housekeeping (skip on first rep)
                 if rep > 0:
                     await topology_group.stop_all_servers()
@@ -1624,6 +1625,7 @@ class BoundedInsertionTaskRunner(PerfTaskRunner):
 
         try:
             for rep in range(self.repetitions):
+                self.check_cancel()
                 if rep > 0:
                     await topology_group.stop_all_servers()
                     primary = topology_group.primary or Server(self.server_infos[0].ip)

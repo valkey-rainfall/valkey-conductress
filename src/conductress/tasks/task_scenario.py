@@ -1479,6 +1479,7 @@ class ScenarioTaskRunner(BaseTaskRunner):
 
         try:
             for rep in range(self.repetitions):
+                self.check_cancel()
                 overlay_handle: Any = None
                 sampler: Optional[ServerSampler] = None
                 sampler_task: Optional["asyncio.Task"] = None

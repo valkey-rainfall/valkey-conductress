@@ -451,6 +451,7 @@ class ReplicaReadTaskRunner(BaseTaskRunner):
         memory_records: list = []
         try:
             for rep in range(1, task.repetitions + 1):
+                self.check_cancel()
                 await self._bring_up(group, first=rep == 1)
                 placement = await self._place_generators()
                 await self._preload(group, rep, placement)

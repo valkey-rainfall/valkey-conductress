@@ -124,9 +124,18 @@ def test_missing_login_is_refused_not_trusted(control_env):
 def test_operator_cancels_a_running_task_and_it_becomes_cancel_requested(control_env):
     service = _service(control_env)
     _submit(service, "task-1", "example-agent")
-    service.claim_task("armbench", actor="runner:armbench")
+    claim = service.claim_task("armbench", actor="runner:armbench")
+    service.accept_task("armbench", "task-1", claim["claim_token"], actor="runner:armbench")
     tasks, changed, _ = service.cancel_task("task-1", actor="operator:example-operator")
     assert (changed, tasks[0]["state"]) == (1, "cancel-requested")
+
+
+def test_operator_cancel_of_a_claimed_task_ends_it_because_no_runner_will_report_it(control_env):
+    service = _service(control_env)
+    _submit(service, "task-1", "example-agent")
+    service.claim_task("armbench", actor="runner:armbench")
+    tasks, changed, _ = service.cancel_task("task-1", actor="operator:example-operator")
+    assert (changed, tasks[0]["state"]) == (1, "cancelled")
 
 
 @pytest.mark.parametrize("task_class", ["canary", "sweep"])
