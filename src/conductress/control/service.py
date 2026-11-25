@@ -17,6 +17,7 @@ from jsonschema.exceptions import ValidationError
 
 from ..duration_estimator import estimate_task_duration_seconds
 from ..public_fields import public_canary_status
+from ..task_envelope import DEFAULT_PRIORITY
 from .canary_profiles import CanaryProfileRegistry
 from .db import ControlDatabase, parse_utc, utc_now, utc_text
 from .drift_analyzer import DriftAnalyzer
@@ -181,6 +182,36 @@ class ControlService:
         if not login:
             return None
         return self.user_directory.get(login)
+
+    @staticmethod
+    def _apply_server_identity(
+        envelope: dict[str, Any],
+        *,
+        actor: str,
+        identity_login: Optional[str],
+        submitter: Optional[User],
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Replace the client's identity and priority with values the server decides.
+
+        A user token submits as its login and always gets the default priority.
+        An operator token submits as ``operator:<label>`` (the actor) and may
+        set any priority. Returns the new envelope and audit detail that names
+        each client value that was replaced.
+        """
+        is_operator = identity_login is None
+        server_by = actor if is_operator else identity_login
+        detail: dict[str, Any] = {}
+        if envelope["submitted_by"] != server_by:
+            detail["client_submitted_by"] = envelope["submitted_by"]
+        changes: dict[str, Any] = {"submitted_by": server_by}
+        if not is_operator and envelope["priority"] != DEFAULT_PRIORITY:
+            detail["client_priority"] = envelope["priority"]
+            changes["priority"] = DEFAULT_PRIORITY
+        if submitter is not None:
+            changes["submitter"] = {"login": submitter.login, "kind": submitter.kind, "sponsor": submitter.sponsor}
+        elif not is_operator:
+            changes["submitter"] = None
+        return {**envelope, **changes}, detail
 
     def _evaluate_provenance(
         self,
@@ -435,6 +466,9 @@ class ControlService:
         self._validate_datetime(envelope["submitted_at"], "submitted_at")
         self.registry.get_runner(envelope["runner_id"])
         submitter = self._resolve_submitter(envelope, identity_login)
+        envelope, identity_detail = self._apply_server_identity(
+            envelope, actor=actor, identity_login=identity_login, submitter=submitter
+        )
         verdict = self._evaluate_provenance(envelope, submitter=submitter, owner_bypass=owner_bypass)
         if not verdict.accepted:
             raise AuthorizationError("PROVENANCE_REJECTED", verdict.reason)
@@ -448,6 +482,7 @@ class ControlService:
         batch_id = envelope.get("batch_id")
         submitter_login = submitter.login if submitter is not None else identity_login
         canonical = self._canonical(envelope)
+        audit_detail = {**identity_detail, **({"reason": approval_reason} if approval_reason else {})} or None
         audits = []
         with self.database.transaction(immediate=True) as connection:
             existing = None
@@ -498,7 +533,7 @@ class ControlService:
                     task_id=envelope["task_id"],
                     runner_id=envelope["runner_id"],
                     new_state=initial_state,
-                    detail={"reason": approval_reason} if approval_reason else None,
+                    detail=audit_detail,
                 )
             )
             row = connection.execute("SELECT * FROM tasks WHERE task_id = ?", (envelope["task_id"],)).fetchone()

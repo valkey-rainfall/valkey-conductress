@@ -9,6 +9,10 @@ from typing import Any, Optional
 
 from .task_queue import BaseTaskData
 
+# Queue priority of a task submitted without an explicit value. The control
+# service clamps every non-operator submission to this value.
+DEFAULT_PRIORITY = 100
+
 
 def _default_submitter() -> str:
     try:
@@ -53,7 +57,7 @@ def build_task_envelope(
     task: BaseTaskData,
     *,
     runner_id: str,
-    priority: int = 100,
+    priority: int = DEFAULT_PRIORITY,
     submitted_by: Optional[str] = None,
     submitter: Optional[dict[str, Any]] = None,
     provenance: Optional[dict[str, Any]] = None,

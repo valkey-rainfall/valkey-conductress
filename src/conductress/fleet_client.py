@@ -91,6 +91,23 @@ class FleetClientConfig:
         return cls._from_token(token)
 
     @classmethod
+    def from_user_env(cls) -> "FleetClientConfig":
+        """Use the user token variables; fall back to the operator ones when they are unset."""
+        try:
+            token = _load_token(
+                "CONDUCTRESS_USER_TOKEN",
+                "CONDUCTRESS_USER_TOKEN_FILE",
+                Path.home() / ".config" / "conductress" / "user.token",
+                "user",
+                "USER_TOKEN_MISSING",
+            )
+        except FleetClientError as exc:
+            if exc.code != "USER_TOKEN_MISSING":
+                raise
+            return cls.from_env()
+        return cls._from_token(token)
+
+    @classmethod
     def from_runner_env(cls) -> "FleetClientConfig":
         token = _load_token(
             "CONDUCTRESS_RUNNER_TOKEN",
@@ -141,6 +158,10 @@ class FleetClient:
     @classmethod
     def from_env(cls) -> "FleetClient":
         return cls(FleetClientConfig.from_env())
+
+    @classmethod
+    def from_user_env(cls) -> "FleetClient":
+        return cls(FleetClientConfig.from_user_env())
 
     @classmethod
     def from_runner_env(cls) -> "FleetClient":

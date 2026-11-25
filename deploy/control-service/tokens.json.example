@@ -17,7 +17,8 @@
       "token_hash": "2222222222222222222222222222222222222222222222222222222222222222",
       "role": "user",
       "label": "replace-with-user-token-hash",
-      "login": "rain"
+      "login": "rain",
+      "scope": "submit"
     }
   ]
 }
