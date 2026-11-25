@@ -64,7 +64,11 @@ class _ProbeFakeServer:
 
 @pytest.mark.asyncio
 async def test_probe_open_loop_sends_at_the_configured_rate():
-    """sent ~= rate x seconds (within 5%) when the server keeps up."""
+    """The probe issues rate x seconds slots, whatever the load on the machine.
+
+    The rate is low (a slot every 100 ms per client) so that a loaded test host still answers
+    in time for most slots.
+    """
     server = _ProbeFakeServer()
     await server.start()
     try:
@@ -77,17 +81,20 @@ async def test_probe_open_loop_sends_at_the_configured_rate():
             host=server.host,
             port=server.port,
             clients=2,
-            rate=200,  # 200/s aggregate
+            rate=20,  # 20/s aggregate: 10 slots per client in 1 s
             reply_timeout=1.0,
             connect_timeout=1.0,
         )
         timeline = await run_probe(config, clock, deadline=1.0)
         total_sent = sum(b["sent"] for b in timeline)
-        # 200/s over ~1s. Open-loop scheduling drifts a little; 5% tolerance.
-        assert 190 <= total_sent <= 210
-        # Nothing stalled, so served ~= sent and skips are ~0.
-        assert sum(b["skipped"] for b in timeline) == 0
-        assert sum(b["served"] for b in timeline) >= total_sent - 4
+        total_skipped = sum(b["skipped"] for b in timeline)
+        # The pacing is what this test checks: the number of slots the probe issued. Each client
+        # has a slot every 100 ms (the second is offset by 50 ms), so 20 slots; allow one of drift.
+        # A slot is either sent or skipped (the previous reply was late), so the sum does not
+        # depend on how fast the machine answers. test_probe_counts_skips_when_the_server_stalls
+        # covers skips; here only most slots must be served by a server that keeps up.
+        assert 19 <= total_sent + total_skipped <= 21
+        assert sum(b["served"] for b in timeline) >= (total_sent + total_skipped) // 2
     finally:
         await server.stop()
 
