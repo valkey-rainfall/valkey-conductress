@@ -2265,6 +2265,11 @@ def handle_queue_cancel(args: argparse.Namespace) -> int:
     print(f"Cancel {args.selector}: {changed} task(s) changed")
     for task in document.get("tasks", []):
         print(f"  {task['task_id']}: {task['state']}")
+    skipped = document.get("skipped") or {}
+    if skipped.get("not_yours"):
+        print(f"  skipped {skipped['not_yours']} task(s) that belong to someone else")
+    for task_id in skipped.get("already_running", []):
+        print(f"  skipped {task_id}: already running (only an operator can cancel it)")
     return 0
 
 

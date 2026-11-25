@@ -117,25 +117,27 @@ def test_reject_cancels_pending_task(control_env):
     assert tasks[0]["state"] == "cancelled"
 
 
-def test_cancel_batch_mixes_unclaimed_and_claimed(control_env):
+def test_user_batch_cancel_skips_own_running_task(control_env):
     service = _service(control_env, directory=_directory())
     service.submit_task(_batch_envelope("t1", "b1", "dante"), actor="user:dante", identity_login="dante")
     service.submit_task(_batch_envelope("t2", "b1", "dante"), actor="user:dante", identity_login="dante")
     # Claim one of them so it is in-flight.
     service.claim_task("armbench", actor="runner:armbench")
-    tasks, changed = service.cancel_task("b1", actor="user:dante", identity_login="dante", is_owner=False)
+    tasks, changed, skipped = service.cancel_task("b1", actor="user:dante", identity_login="dante", is_operator=False)
     states = {t["task_id"]: t["state"] for t in tasks}
-    assert changed == 2
-    assert set(states.values()) == {"cancelled", "cancel-requested"}
+    assert changed == 1
+    assert sorted(states.values()) == ["cancelled", "claimed"]
+    assert skipped["already_running"] == [t["task_id"] for t in tasks if t["state"] == "claimed"]
 
 
 def test_non_owner_cannot_cancel_another_users_task(control_env):
     service = _service(control_env, directory=_directory())
     service.submit_task(_batch_envelope("t1", "b1", "rain"), actor="user:rain", identity_login="rain")
     # dante (non-owner) attempts to cancel rain's task: nothing changes.
-    tasks, changed = service.cancel_task("t1", actor="user:dante", identity_login="dante", is_owner=False)
+    tasks, changed, skipped = service.cancel_task("t1", actor="user:dante", identity_login="dante", is_operator=False)
     assert changed == 0
-    assert tasks[0]["state"] == "queued"
+    assert tasks == []
+    assert skipped == {"not_yours": 1, "already_running": []}
 
 
 def test_list_mine_filters_by_submitter(control_env):

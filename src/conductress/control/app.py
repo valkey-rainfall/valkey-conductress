@@ -64,23 +64,6 @@ def _check_write_scope(identity: AuthIdentity) -> None:
         raise AuthorizationError("SCOPE_READ_ONLY", "token scope does not allow changes")
 
 
-def _is_owner(request: web.Request) -> bool:
-    """True if the caller may act on anyone's tasks.
-
-    An operator token has full control. A user token is an owner only when the
-    directory marks its login as the owner role.
-    """
-    identity: AuthIdentity = request["auth"]
-    if identity.role == "operator":
-        return True
-    if identity.role == "user" and identity.login is not None:
-        directory = request.app[SERVICE_KEY].user_directory
-        if directory is not None:
-            user = directory.get(identity.login)
-            return user is not None and user.is_owner
-    return False
-
-
 def _require_approver(request: web.Request) -> AuthIdentity:
     """Require an approver (or owner, or operator) to resolve pending tasks."""
     identity: AuthIdentity = request["auth"]
@@ -354,14 +337,13 @@ async def _reject_tasks(request: web.Request) -> web.Response:
 
 async def _cancel_task(request: web.Request) -> web.Response:
     identity = _require_submit_scope(request)
-    is_owner = _is_owner(request)
-    tasks, changed = request.app[SERVICE_KEY].cancel_task(
+    tasks, changed, skipped = request.app[SERVICE_KEY].cancel_task(
         request.match_info["task_id"],
         actor=_actor(identity),
         identity_login=identity.login,
-        is_owner=is_owner,
+        is_operator=identity.role == "operator",
     )
-    return _response(tasks=tasks, changed=changed)
+    return _response(tasks=tasks, changed=changed, skipped=skipped)
 
 
 async def _fleet(request: web.Request) -> web.Response:
