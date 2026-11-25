@@ -83,6 +83,10 @@ class BenchmarkPoint:
     # not comparable across scopes, so the exporter tags every point with it.
     perf_counters_scope: Optional[str] = None
     breakdown: Optional[dict[str, float]] = None  # per-category memory breakdown (bytes/key)
+    # What a memory task recorded about its run (engine identity, binary sha256, profiling,
+    # settle, used_memory and RSS samples; see memory_record.py). None on points recorded
+    # before the record existed: the export publishes those with settled=None (unknown).
+    memory_record: Optional[dict[str, Any]] = None
     raw_stacks: Optional[list[list]] = None  # retained resolved stacks for re-categorization
     latency_data: Optional[dict] = None  # full latency results (p50, p99.9, histogram, rps)
     cpu_stacks_main: Optional[list[list]] = None  # per-thread collapsed stacks [[stack, count], ...]
@@ -260,6 +264,7 @@ class SweepState:
                     "perf_rep_count": p.perf_rep_count,
                     "perf_counters_scope": p.perf_counters_scope,
                     "breakdown": p.breakdown,
+                    "memory_record": p.memory_record,
                     "raw_stacks": p.raw_stacks,
                     "latency_data": p.latency_data,
                     "cpu_stacks_main": p.cpu_stacks_main,
@@ -327,6 +332,7 @@ class SweepState:
                 perf_rep_count=p_data.get("perf_rep_count"),
                 perf_counters_scope=p_data.get("perf_counters_scope"),
                 breakdown=p_data.get("breakdown"),
+                memory_record=p_data.get("memory_record"),
                 raw_stacks=p_data.get("raw_stacks"),
                 latency_data=p_data.get("latency_data"),
                 cpu_stacks_main=p_data.get("cpu_stacks_main"),

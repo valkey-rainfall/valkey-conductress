@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, Callable, Optional
 
 from conductress.config import ANNOTATION_THRESHOLD
 from conductress.heap_profiler import recategorize_from_stacks
+from conductress.memory_record import export_memory_fields
 from conductress.public_fields import EVENT_PREFIX, public_change_label, public_environment, public_generation
 from conductress.sweep.planner import BenchmarkPoint, PointStatus, Segment, SweepPlanner, SweepState
 
@@ -274,6 +275,9 @@ def export_series(
     client_threads: Optional[int] = None,
     tls: Optional[bool] = None,
     settled: Optional[bool] = None,
+    user_data_bytes: Optional[int] = None,
+    item_count: Optional[int] = None,
+    profiled: Optional[bool] = None,
 ) -> None:
     """Export sweep state to dashboard-ready series.json.
 
@@ -302,6 +306,13 @@ def export_series(
         settled: Whether the series' memory points were sampled after any in-progress
             rehash had finished; recorded in ``metadata`` when provided so a reader can
             tell a settled series from one measured as loaded.  None omits the key.
+        user_data_bytes: Memory series only. The user data bytes per item the overhead excludes.
+            When given, every point gets a ``memory`` object (total, RSS, item count, settle state,
+            engine identity; see memory_record.export_memory_fields) and the metadata gets
+            ``user_data_bytes``, ``item_count`` and ``profiled``. None leaves other series unchanged.
+        item_count: Memory series only. The item count the series fills.
+        profiled: Memory series only. Whether the series' runs have the allocator profiling by
+            default. Each point also says whether it was profiled.
     """
     if not workload:
         from conductress.config import SWEEP_IO_THREADS, SWEEP_PIPELINING, SWEEP_TEST, SWEEP_VAL_SIZE
@@ -359,6 +370,8 @@ def export_series(
             entry["measured_at"] = point.measured_at
         if point.environment is not None:
             entry["env"] = point.environment
+        if user_data_bytes is not None:
+            entry["memory"] = export_memory_fields(point.memory_record, point.value, user_data_bytes)
         if include_breakdown and point.raw_stacks and num_keys > 0:
             entry["breakdown"] = recategorize_from_stacks(point.raw_stacks, num_keys)
             has_breakdown = True
@@ -438,6 +451,12 @@ def export_series(
     # comparable on one line.  None omits the key (throughput series).
     if settled is not None:
         series["metadata"]["settled"] = settled
+    # Memory series: what "overhead" excludes, how many items the run fills, and whether runs
+    # have the allocator profiling by default (a profiled run's RSS is not published).
+    if user_data_bytes is not None:
+        series["metadata"]["user_data_bytes"] = user_data_bytes
+        series["metadata"]["item_count"] = item_count
+        series["metadata"]["profiled"] = profiled
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(series, indent=2))

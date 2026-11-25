@@ -14,6 +14,22 @@ from conductress.tasks.task_mem_efficiency import MemTaskData, MemTaskRunner
 from conductress.topology import TopologySpec
 
 
+def memory_info_sequence(before, after):
+    """An ``info`` side effect: INFO memory answers ``before`` first and ``after`` from then on.
+
+    Other sections (server) answer an empty dict, as an engine that reports nothing would.
+    """
+    calls = {"memory": 0}
+
+    async def _info(section):
+        if section != "memory":
+            return {}
+        calls["memory"] += 1
+        return before if calls["memory"] == 1 else after
+
+    return _info
+
+
 class TestMemTaskData:
     """Test MemTaskData class."""
 
@@ -201,10 +217,7 @@ class TestMemTaskRunner:
         mock_server_class.with_path = AsyncMock(return_value=mock_server)
 
         # Setup memory info responses
-        mock_server.info.side_effect = [
-            {"used_memory": "1000000"},  # before
-            {"used_memory": "6000000"},  # after (5MB increase for 5M items)
-        ]
+        mock_server.info.side_effect = memory_info_sequence({"used_memory": "1000000"}, {"used_memory": "6000000"})
 
         # Set cached_binary_path as it would be set in run()
         runner.cached_binary_path = Path("/mock/binary")
@@ -232,10 +245,7 @@ class TestMemTaskRunner:
         runner.user_data_bytes = 28
 
         mock_server_class.with_path = AsyncMock(return_value=mock_server)
-        mock_server.info.side_effect = [
-            {"used_memory": "1000000"},
-            {"used_memory": "2000000"},
-        ]
+        mock_server.info.side_effect = memory_info_sequence({"used_memory": "1000000"}, {"used_memory": "2000000"})
         mock_server.count_items_expires = AsyncMock(return_value=(5000000, 0))  # No expiration for non-set
 
         # Set cached_binary_path as it would be set in run()
@@ -253,10 +263,7 @@ class TestMemTaskRunner:
         runner.has_expire = True
 
         mock_server_class.with_path = AsyncMock(return_value=mock_server)
-        mock_server.info.side_effect = [
-            {"used_memory": "1000000"},
-            {"used_memory": "2000000"},
-        ]
+        mock_server.info.side_effect = memory_info_sequence({"used_memory": "1000000"}, {"used_memory": "2000000"})
         mock_server.count_items_expires.return_value = (
             5000000,
             5000000,
@@ -311,10 +318,9 @@ class TestMemTaskRunner:
         val_size = 64
         key_size = 16
 
-        mock_server.info.side_effect = [
-            {"used_memory": str(before_mem)},
-            {"used_memory": str(after_mem)},
-        ]
+        mock_server.info.side_effect = memory_info_sequence(
+            {"used_memory": str(before_mem)}, {"used_memory": str(after_mem)}
+        )
 
         # Set cached_binary_path as it would be set in run()
         runner.cached_binary_path = Path("/mock/binary")
@@ -335,10 +341,7 @@ class TestMemTaskRunner:
     async def test_assertion_failures(self, mock_server_class, mock_populate, runner, mock_server):
         """Test assertion failures in count verification."""
         mock_server_class.with_path = AsyncMock(return_value=mock_server)
-        mock_server.info.side_effect = [
-            {"used_memory": "1000000"},
-            {"used_memory": "2000000"},
-        ]
+        mock_server.info.side_effect = memory_info_sequence({"used_memory": "1000000"}, {"used_memory": "2000000"})
 
         # Wrong item count
         mock_server.count_items_expires.return_value = (4000000, 0)  # Should be 5M
@@ -358,10 +361,7 @@ class TestMemTaskRunner:
         runner.has_expire = True
 
         mock_server_class.with_path = AsyncMock(return_value=mock_server)
-        mock_server.info.side_effect = [
-            {"used_memory": "1000000"},
-            {"used_memory": "2000000"},
-        ]
+        mock_server.info.side_effect = memory_info_sequence({"used_memory": "1000000"}, {"used_memory": "2000000"})
 
         # Wrong expire count when expiration is enabled
         mock_server.count_items_expires.return_value = (
