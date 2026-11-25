@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Iterator, Optional
 
 logger = logging.getLogger(__name__)
-DATABASE_SCHEMA_VERSION = 4
+DATABASE_SCHEMA_VERSION = 5
 
 _SCHEMA_V1 = """
 CREATE TABLE IF NOT EXISTS tasks (
@@ -202,6 +202,45 @@ CREATE INDEX IF NOT EXISTS idx_tasks_submitter ON tasks(submitter_login);
 """
 
 
+# Version 5 adds one table, task_usage (see usage.py). It is applied inside one
+# transaction together with the backfill and the version row, so a failure
+# leaves the database at version 4. No existing table or row is changed. A
+# version 4 binary refuses a version 5 file ("newer than supported").
+_SCHEMA_V5 = """
+CREATE TABLE IF NOT EXISTS task_usage (
+    task_id TEXT PRIMARY KEY,
+    submitted_by TEXT NOT NULL,
+    batch_id TEXT,
+    note TEXT,
+    runner_id TEXT NOT NULL,
+    platform TEXT,
+    task_class TEXT NOT NULL CHECK (task_class IN ('manual', 'canary', 'sweep', 'local')),
+    queued_at TEXT,
+    started_at TEXT,
+    ended_at TEXT NOT NULL,
+    expected_seconds REAL,
+    runner_seconds REAL NOT NULL,
+    outcome TEXT NOT NULL CHECK (
+        outcome IN ('completed', 'failed', 'cancelled-queued', 'cancelled-running')
+    )
+)
+"""
+_SCHEMA_V5_INDEXES = ("CREATE INDEX IF NOT EXISTS idx_task_usage_ended ON task_usage(ended_at)",)
+
+
+def _migrate_to_v5(connection: sqlite3.Connection) -> None:
+    from .usage import backfill_task_usage
+
+    # The earlier migrations use executescript, which ends the open transaction.
+    if not connection.in_transaction:
+        connection.execute("BEGIN IMMEDIATE")
+    connection.execute(_SCHEMA_V5)
+    for statement in _SCHEMA_V5_INDEXES:
+        connection.execute(statement)
+    backfill_task_usage(connection)
+    connection.execute("INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)", (5, utc_text()))
+
+
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -265,6 +304,8 @@ class ControlDatabase:
                     "INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)",
                     (4, utc_text()),
                 )
+            if version < 5:
+                _migrate_to_v5(connection)
             connection.commit()
         except Exception:
             connection.rollback()

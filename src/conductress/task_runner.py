@@ -6,7 +6,7 @@ import json
 import logging
 import time
 import traceback
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Protocol
 
@@ -34,6 +34,11 @@ from .status_export import build_status, export_status
 from .task_queue import BaseTaskData, TaskQueue
 
 logger = logging.getLogger(__name__)
+
+
+def _utc_text() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
 
 # Sort key of a subscriber with nothing planned (or no planner at all): below
 # every real task, including the confirmation sweep's CONFIRM cells.
@@ -73,6 +78,9 @@ class TaskRunner:
         mailbox: Optional[RunnerMailbox] = None,
     ) -> None:
         self.task: Optional[BaseTaskData] = None
+        # Usage class of a task from the local queue: "local" (queued by hand)
+        # or "sweep" (queued by the sweep scheduler just before it was taken).
+        self._local_task_class = "local"
         self._subscribers: list[TaskSubscriber] = []
         self._publish_target = publish_target
         self._mailbox = mailbox
@@ -318,6 +326,7 @@ class TaskRunner:
 
         local = queue.get_next_task()
         if local is not None:
+            self._local_task_class = "local"
             return local
 
         if self._mailbox:
@@ -328,7 +337,10 @@ class TaskRunner:
                 return None
 
         self._schedule_next()
-        return queue.get_next_task()
+        scheduled = queue.get_next_task()
+        if scheduled is not None:
+            self._local_task_class = "sweep"
+        return scheduled
 
     def _settle_management(self) -> None:
         if (self._mailbox is not None or self._publish_target) and self._management_settle_seconds:
@@ -356,6 +368,7 @@ class TaskRunner:
                         continue
                     local = queue.get_next_task()
                     if local is not None:
+                        self._local_task_class = "local"
                         self.task = local
                         continue
                     if self._mailbox is None or time.monotonic() >= next_fleet_poll:
@@ -366,6 +379,9 @@ class TaskRunner:
             task = self.task
             self._publish_boundary("starting", task)
             self._settle_management()
+            started_at = _utc_text()
+            # Decided now: the journal stops owning a remote task once its outcome is delivered.
+            reports_usage = self._mailbox is not None and not self._mailbox.owns(task.task_id)
             try:
                 await self.__run_task(task)
             except Exception as exc:
@@ -377,6 +393,8 @@ class TaskRunner:
                 queue.finish_task(task)
                 if self._mailbox and self._mailbox.owns(task.task_id):
                     self._mailbox.flush_pending_outcome()
+                if reports_usage:
+                    self._record_local_usage(task, started_at, "failed")
                 self._publish_boundary("failed", task)
             else:
                 for sub in self._subscribers:
@@ -386,9 +404,18 @@ class TaskRunner:
                 queue.finish_task(task)
                 if self._mailbox and self._mailbox.owns(task.task_id):
                     self._mailbox.flush_pending_outcome()
+                if reports_usage:
+                    self._record_local_usage(task, started_at, "completed")
                 self._publish_boundary("completed", task)
 
             self.task = self._choose_next(queue)
+
+    def _record_local_usage(self, task: BaseTaskData, started_at: str, outcome: str) -> None:
+        """Report the runner time of a task from the local queue. A remote task is reported by the control service."""
+        if self._mailbox is not None:
+            self._mailbox.record_local_usage(
+                task, task_class=self._local_task_class, started_at=started_at, outcome=outcome
+            )
 
     def _epoch_ordered_subscribers(self) -> list:
         """Subscribers ordered by explicit epoch precedence, highest priority first.

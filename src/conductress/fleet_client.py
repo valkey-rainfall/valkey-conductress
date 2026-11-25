@@ -348,6 +348,17 @@ class FleetClient:
             or {}
         )
 
+    def post_usage(self, runner_id: str, record: dict[str, Any]) -> dict[str, Any]:
+        return (
+            self._request(
+                "POST",
+                f"runners/{runner_id}/usage",
+                body=record,
+                headers={"Idempotency-Key": f"usage:{record.get('task_id', '')}"},
+            )
+            or {}
+        )
+
     def canary_status(self) -> dict[str, Any]:
         return self._request("GET", "canary/status") or {}
 

@@ -101,6 +101,7 @@ Runner routes:
 ```text
 PUT  /api/v1/runners/{runner_id}/status
 POST /api/v1/runners/{runner_id}/claim
+POST /api/v1/runners/{runner_id}/usage
 POST /api/v1/tasks/{task_id}/accept
 POST /api/v1/tasks/{task_id}/complete
 POST /api/v1/tasks/{task_id}/fail
@@ -370,6 +371,26 @@ SQLite uses WAL mode, foreign keys, explicit `BEGIN IMMEDIATE` claim transaction
 ```bash
 sqlite3 /var/lib/conductress-control/control.db ".backup '/var/lib/conductress-control/control.backup.db'"
 ```
+
+### Usage accounting (schema 5)
+
+Schema version 5 adds one table, `task_usage`: one row per task with the runner time it used (`runner_seconds`, `ended_at - started_at`, 0 for a task cancelled before a runner accepted it), its `outcome` (`completed`, `failed`, `cancelled-queued`, `cancelled-running`), the login that submitted it, batch, note, runner, platform and the expected duration. The service writes the row in the same transaction that ends the task (outcome, cancel, reject). A repeated event stores one row (`task_id` is the primary key).
+
+A runner posts one record to `POST /api/v1/runners/{runner_id}/usage` (runner token of that runner) for each task it ran from its own queue, which the service never sees: class `sweep` (queued by the sweep scheduler) or `local` (queued by hand). The record has the task ID, class, start and end time, and outcome. The service computes the seconds and stores `sweep` or `local` as the submitter. The runner keeps records it could not deliver in `fleet_usage_outbox.json` (at most 500) and tries again at the next boundary, so an outage never blocks a task. Only a runner in `live` fleet mode posts.
+
+This version has no report, no CLI command and no published file for usage. The table is not read by any route yet.
+
+The migration only adds the table and one `schema_migrations` row, in one transaction. It copies values out of `tasks` to fill the table (platform is filled at the next service start from the fleet manifest) and does not change any existing row. It is safe to run again. To check a database before deploying, run the migration on a temporary copy:
+
+```bash
+conductress-control check-migration /path/to/backup-copy.db
+```
+
+The command never writes to the file you name. It copies it with SQLite's backup API, runs the migration twice on the copy, and prints the schema version, the `integrity_check` and `foreign_key_check` results, and the row count and content state of every table before and after. It prints counts only, no row values. It exits 1 if an existing row changed, a check failed, or the second run changed anything.
+
+Deploy order: the control service first. An old runner never posts usage and works unchanged. A new runner that posts to an old service gets 404, keeps the record in its outbox, and delivers it after the service is updated, so the other order is also safe.
+
+Rollback: a version 4 service refuses a version 5 file ("newer than supported"). Rolling back the code therefore means stopping the service and restoring the backup taken before the deploy; tasks stored after the deploy are not in that backup. Because version 5 only adds a table, an operator can instead delete the version 5 row (`DELETE FROM schema_migrations WHERE version = 5`) on the stopped service so that version 4 code starts. The extra `task_usage` table is ignored by version 4 code, and a later version 5 start adds the rows that are missing.
 
 `audit_log` in SQLite is authoritative. `/var/log/conductress-control/audit.jsonl` is a best-effort append-only mirror for external inspection.
 

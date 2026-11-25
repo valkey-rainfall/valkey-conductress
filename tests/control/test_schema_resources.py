@@ -7,6 +7,7 @@ SCHEMA_NAMES = [
     "fleet-manifest.schema.json",
     "runner-config.schema.json",
     "runner-status.schema.json",
+    "runner-usage.schema.json",
     "task-envelope.schema.json",
     "task-outcome.schema.json",
 ]

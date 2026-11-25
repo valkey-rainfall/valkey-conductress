@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://conductress.dev/schemas/runner-usage-v1.json",
+  "title": "Conductress runner usage record",
+  "description": "Runner time used by one task that ran from the runner's own local queue.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "task_id", "task_class", "started_at", "ended_at", "outcome"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "task_id": {"type": "string", "minLength": 1, "maxLength": 200, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"},
+    "task_class": {"enum": ["sweep", "local"]},
+    "started_at": {"type": "string", "format": "date-time"},
+    "ended_at": {"type": "string", "format": "date-time"},
+    "outcome": {"enum": ["completed", "failed", "cancelled-running"]}
+  }
+}

@@ -25,6 +25,7 @@ from .errors import AuthorizationError, ConflictError, ControlError, NotFoundErr
 from .fleet_registry import FleetRegistry
 from .provenance import ProvenanceGate, ProvenanceVerdict
 from .schema import load_schema
+from .usage import insert_usage, seconds_between, usage_from_task_row
 from .users import User, UserDirectory
 
 logger = logging.getLogger(__name__)
@@ -111,12 +112,61 @@ class ControlService:
         self.task_validator = _validator("task-envelope.schema.json")
         self.status_validator = _validator("runner-status.schema.json")
         self.outcome_validator = _validator("task-outcome.schema.json")
+        self.usage_validator = _validator("runner-usage.schema.json")
         self._canary_profiles = canary_profiles
         self.drift_analyzer = DriftAnalyzer(
             database,
             canary_profiles=canary_profiles,
             fleet_registry=registry,
         )
+
+    def _platform_of(self, runner_id: str) -> Optional[str]:
+        """The platform of a runner in the fleet manifest, or None if the manifest has no such runner."""
+        try:
+            return self.registry.get_runner(runner_id, require_enabled=False)["platform"]
+        except NotFoundError:
+            return None
+
+    def fill_usage_platforms(self) -> int:
+        """Set the platform on usage rows that have none (rows added by the v5 migration). Run at start."""
+        filled = 0
+        with self.database.transaction(immediate=True) as connection:
+            runner_ids = [
+                r["runner_id"]
+                for r in connection.execute("SELECT DISTINCT runner_id FROM task_usage WHERE platform IS NULL")
+            ]
+            for runner_id in runner_ids:
+                platform = self._platform_of(runner_id)
+                if platform is not None:
+                    filled += connection.execute(
+                        "UPDATE task_usage SET platform=? WHERE runner_id=? AND platform IS NULL", (platform, runner_id)
+                    ).rowcount
+        return filled
+
+    def record_runner_usage(self, runner_id: str, record: dict[str, Any]) -> bool:
+        """Store the usage of a task a runner ran from its own queue. A repeated post stores nothing. Returns True if stored."""
+        self._validate(self.usage_validator, record, "usage record")
+        self._validate_datetime(record["started_at"], "started_at")
+        self._validate_datetime(record["ended_at"], "ended_at")
+        if parse_utc(record["ended_at"]) < parse_utc(record["started_at"]):
+            raise ControlError("USAGE_TIME_INVALID", "ended_at is before started_at")
+        row = {
+            "task_id": record["task_id"],
+            "submitted_by": record["task_class"],
+            "batch_id": None,
+            "note": None,
+            "runner_id": runner_id,
+            "platform": self._platform_of(runner_id),
+            "task_class": record["task_class"],
+            "queued_at": None,
+            "started_at": record["started_at"],
+            "ended_at": record["ended_at"],
+            "expected_seconds": None,
+            "runner_seconds": seconds_between(record["started_at"], record["ended_at"]),
+            "outcome": record["outcome"],
+        }
+        with self.database.transaction(immediate=True) as connection:
+            return insert_usage(connection, row)
 
     @staticmethod
     def _validate(validator: Draft202012Validator, document: dict[str, Any], kind: str) -> None:
@@ -635,6 +685,15 @@ class ControlService:
                 )
         return {"generated_at": utc_text(), "runners": runners}
 
+    def _record_cancelled_usage(self, connection: sqlite3.Connection, row: sqlite3.Row, ended_at: str) -> None:
+        """A task cancelled before any runner accepted it used no runner time."""
+        insert_usage(
+            connection,
+            usage_from_task_row(
+                row, outcome="cancelled-queued", ended_at=ended_at, platform=self._platform_of(row["runner_id"])
+            ),
+        )
+
     # States a caller may still cancel outright (nothing has been handed to a
     # runner yet). Others require the softer cancel-requested path.
     _UNCLAIMED_CANCELLABLE = ("queued", "pending-approval")
@@ -700,6 +759,8 @@ class ControlService:
                     "UPDATE tasks SET state=?, updated_at=? WHERE task_id=? AND state=?",
                     (new_state, now, row["task_id"], state),
                 )
+                if new_state == "cancelled":
+                    self._record_cancelled_usage(connection, row, now)
                 audits.append(
                     self.database.insert_audit(
                         connection,
@@ -770,6 +831,8 @@ class ControlService:
                     "UPDATE tasks SET state=?, updated_at=? WHERE task_id=? AND state='pending-approval'",
                     (new_state, now, row["task_id"]),
                 )
+                if new_state == "cancelled":
+                    self._record_cancelled_usage(connection, row, now)
                 audits.append(
                     self.database.insert_audit(
                         connection,
@@ -953,6 +1016,15 @@ class ControlService:
             connection.execute(
                 "UPDATE tasks SET state=?, completed_at=?, outcome_json=?, updated_at=? WHERE task_id=?",
                 (terminal, now, canonical, utc_text(), task_id),
+            )
+            insert_usage(
+                connection,
+                usage_from_task_row(
+                    row,
+                    outcome="cancelled-running" if row["state"] == "cancel-requested" else terminal,
+                    ended_at=now,
+                    platform=self._platform_of(runner_id),
+                ),
             )
             audit = self.database.insert_audit(
                 connection,
