@@ -1,6 +1,8 @@
 """Usage report, public usage summary and task visibility (multi-agent queue note, rollout step 4)."""
 
 import json
+import os
+import shutil
 from datetime import datetime, timezone
 
 import pytest
@@ -246,7 +248,7 @@ def test_public_projection_drops_unlisted_keys_and_withholds_a_private_platform_
 
 def test_summary_file_is_written_under_the_published_directory(usage_service, control_env):
     usage_service.publish_usage_summary()
-    path = control_env["config"].database_path.parent / "www" / "usage" / "summary.json"
+    path = control_env["config"].database_path.parent / "www" / "canary" / "usage" / "summary.json"
     document = json.loads(path.read_text(encoding="utf-8"))
     assert public_fields.unknown_usage_keys(document) == []
     text = path.read_text(encoding="utf-8")
@@ -281,7 +283,7 @@ def test_ending_a_task_refreshes_the_summary_file_without_private_values(control
         "error": None,
     }
     service.record_outcome("armbench", "task-1", outcome, actor="runner:armbench")
-    text = (www / "usage" / "summary.json").read_text(encoding="utf-8")
+    text = (www / "canary" / "usage" / "summary.json").read_text(encoding="utf-8")
     assert json.loads(text)["platforms"][0]["days"][0]["task_count"]["manual"] == 1
     for private in ("example-agent-a", SECRET_BATCH, SECRET_NOTE, "198.51.100.7", "armbench"):
         assert private not in text
@@ -390,3 +392,63 @@ async def test_a_finished_task_is_a_result_and_readable_by_any_user_token(report
         connection.execute("UPDATE tasks SET state='completed' WHERE task_id='task-a'")
     shown = await report_client.get("/api/v1/tasks/task-a", headers=_bearer(READ_TOKEN))
     assert shown.status == 200
+
+
+def _www(control_env):
+    return control_env["config"].database_path.parent / "www"
+
+
+def test_summary_goes_under_canary_never_beside_it(usage_service, control_env):
+    usage_service.publish_usage_summary()
+    assert (_www(control_env) / "canary" / "usage" / "summary.json").is_file()
+    assert not (_www(control_env) / "usage").exists()
+
+
+def test_summary_directories_and_file_are_public_even_with_a_private_umask(usage_service, control_env):
+    old = os.umask(0o077)
+    try:
+        usage_service.publish_usage_summary()
+    finally:
+        os.umask(old)
+    for path in (_www(control_env) / "canary", _www(control_env) / "canary" / "usage"):
+        assert oct(path.stat().st_mode & 0o777) == "0o755"
+    assert oct((_www(control_env) / "canary" / "usage" / "summary.json").stat().st_mode & 0o777) == "0o644"
+
+
+def test_an_unwritable_target_does_not_stop_the_service_and_warns_once(usage_service, control_env, caplog):
+    (_www(control_env) / "canary").parent.mkdir(parents=True, exist_ok=True)
+    (_www(control_env) / "canary").write_text("a file where the directory should be", encoding="utf-8")
+    record = {
+        "schema_version": 1,
+        "task_id": "local-1",
+        "task_class": "local",
+        "started_at": "2026-08-29T00:00:00Z",
+        "ended_at": "2026-08-29T00:01:00Z",
+        "outcome": "completed",
+    }
+    with caplog.at_level("INFO", logger="conductress.control.service"):
+        for index in range(3):
+            usage_service.publish_usage_summary()
+            assert usage_service.record_runner_usage("armbench", {**record, "task_id": f"local-{index}"}) is True
+    warnings = [
+        r for r in caplog.records if r.levelname == "WARNING" and "unable to publish usage summary" in r.message
+    ]
+    assert len(warnings) == 1
+    assert "canary/usage" in warnings[0].message
+
+
+def test_the_warning_comes_again_after_a_recovery(usage_service, control_env, caplog):
+    blocker = _www(control_env) / "canary"
+    _www(control_env).mkdir(parents=True, exist_ok=True)
+    blocker.write_text("blocked", encoding="utf-8")
+    with caplog.at_level("INFO", logger="conductress.control.service"):
+        usage_service.publish_usage_summary()
+        blocker.unlink()
+        usage_service.publish_usage_summary()
+        assert (blocker / "usage" / "summary.json").is_file()
+        shutil.rmtree(blocker)
+        blocker.write_text("blocked again", encoding="utf-8")
+        usage_service.publish_usage_summary()
+    messages = [(r.levelname, r.message) for r in caplog.records]
+    assert len([m for m in messages if m[0] == "WARNING"]) == 2
+    assert any(level == "INFO" and "written again" in text for level, text in messages)

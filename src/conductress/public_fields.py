@@ -385,7 +385,7 @@ def unknown_canary_keys(status: Dict[str, Any]) -> List[str]:
 
 # ------------------------------------------------------------ usage summary
 
-# usage/summary.json: runner time per platform and day. No login, runner id,
+# canary/usage/summary.json: runner time per platform and day. No login, runner id,
 # batch id, note or free text: a platform label is the most specific name.
 USAGE_SUMMARY_KEYS = frozenset({"schema_version", "generated_at", "window_days", "platforms"})
 USAGE_PLATFORM_KEYS = frozenset({"platform", "queue_depth", "days"})

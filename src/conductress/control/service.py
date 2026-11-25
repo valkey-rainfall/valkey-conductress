@@ -116,6 +116,7 @@ class ControlService:
         self.findings_interval_seconds = findings_interval_seconds
         self._findings_lock = threading.Lock()
         self._findings_published_at: Optional[float] = None
+        self._usage_publish_failed = False
         # Injectable HTTP delivery for the approval webhook; defaults to urlopen.
         self._notifier = notifier or _default_notifier
         self.task_validator = _validator("task-envelope.schema.json")
@@ -754,15 +755,27 @@ class ControlService:
         return public_usage_summary(build_public_summary(rows, depth, now=now))
 
     def publish_usage_summary(self) -> None:
-        """Write usage/summary.json under the published canary directory. Best effort: failures are logged only."""
+        """Write canary/usage/summary.json under the published canary directory. Best effort.
+
+        The file goes under ``canary/`` because that is the directory the service may write to
+        on the data host. A failure never stops the task path. It is logged as a warning once
+        per outage (not on every write, which would fill the journal), and again after the
+        file was written successfully in between.
+        """
         if self.published_canary_dir is None:
             return
+        directory = self.published_canary_dir / "canary" / "usage"
         try:
-            self._write_static(
-                self._public_dir(self.published_canary_dir / "usage") / "summary.json", self.usage_summary()
-            )
-        except Exception:  # pylint: disable=broad-except
-            logger.warning("unable to publish usage summary", exc_info=True)
+            self._public_dir(directory.parent)
+            self._write_static(self._public_dir(directory) / "summary.json", self.usage_summary())
+        except Exception as exc:  # pylint: disable=broad-except
+            if not self._usage_publish_failed:
+                logger.warning("unable to publish usage summary to %s: %s", directory, exc, exc_info=True)
+            self._usage_publish_failed = True
+            return
+        if self._usage_publish_failed:
+            logger.info("usage summary is written again in %s", directory)
+        self._usage_publish_failed = False
 
     def _record_cancelled_usage(self, connection: sqlite3.Connection, row: sqlite3.Row, ended_at: str) -> None:
         """A task cancelled before any runner accepted it used no runner time."""
