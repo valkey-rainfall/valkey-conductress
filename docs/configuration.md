@@ -595,5 +595,16 @@ The control CLI needs an operator bearer token.
 | `CONDUCTRESS_OPERATOR_TOKEN` | The token value. |
 | `CONDUCTRESS_OPERATOR_TOKEN_FILE` | Path to an owner-only file holding the token (default `~/.config/conductress/operator.token`). Group/world-readable files are rejected. |
 
+A user or agent that holds a `user` token (not an operator token) sets these instead:
+
+| Environment variable | Meaning |
+| --- | --- |
+| `CONDUCTRESS_USER_TOKEN` | The user token value. |
+| `CONDUCTRESS_USER_TOKEN_FILE` | Path to an owner-only file holding the token (default `~/.config/conductress/user.token`). |
+
+The task commands (`queue add ...`, `queue cancel`, `queue mine`, `queue pending`,
+`queue approve`, `queue reject`) read the user variables first and use the operator variables when the
+user ones are not set, so a user token that is still in `CONDUCTRESS_OPERATOR_TOKEN` keeps working.
+
 See the [Fleet-aware CLI](fleet-cli.md) guide for full details on secure client
 configuration.

@@ -160,3 +160,34 @@ def test_delete_network_failure_is_not_retried():
         client.cancel_task("task-1")
     assert error.value.code == "CONTROL_UNREACHABLE"
     assert len(attempts) == 1
+
+
+def test_user_env_prefers_user_token_and_falls_back_to_operator_token(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    for name in (
+        "CONDUCTRESS_USER_TOKEN",
+        "CONDUCTRESS_USER_TOKEN_FILE",
+        "CONDUCTRESS_OPERATOR_TOKEN",
+        "CONDUCTRESS_OPERATOR_TOKEN_FILE",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    with pytest.raises(FleetClientError) as missing:
+        FleetClientConfig.from_user_env()
+    assert missing.value.code == "OPERATOR_TOKEN_MISSING"
+
+    monkeypatch.setenv("CONDUCTRESS_OPERATOR_TOKEN", "old-variable-token")
+    assert FleetClientConfig.from_user_env().token == "old-variable-token"
+
+    monkeypatch.setenv("CONDUCTRESS_USER_TOKEN", "user-variable-token")
+    assert FleetClientConfig.from_user_env().token == "user-variable-token"
+
+
+def test_user_env_rejects_a_group_readable_user_token_file(monkeypatch, tmp_path):
+    token_file = tmp_path / "user.token"
+    token_file.write_text("secret\n", encoding="utf-8")
+    token_file.chmod(0o644)
+    monkeypatch.delenv("CONDUCTRESS_USER_TOKEN", raising=False)
+    monkeypatch.setenv("CONDUCTRESS_USER_TOKEN_FILE", str(token_file))
+    with pytest.raises(FleetClientError) as error:
+        FleetClientConfig.from_user_env()
+    assert error.value.code == "TOKEN_FILE_PERMISSIONS"

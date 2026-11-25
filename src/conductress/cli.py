@@ -383,7 +383,7 @@ def _submit_tasks(tasks: List[BaseTaskData], args: argparse.Namespace) -> dict:
     from .fleet_client import FleetClient
     from .task_envelope import build_task_envelope
 
-    client = FleetClient.from_env()
+    client = FleetClient.from_user_env()
     runner_id = resolve_runner(client, runner_id=runner_arg, platform=platform_arg)
     # Every remote submission belongs to a batch so a sequence can be cancelled
     # or inspected as a unit. Honour an explicit --batch; otherwise mint one.
@@ -2248,7 +2248,7 @@ def handle_queue_clear(args: argparse.Namespace) -> int:
 def _remote_client():
     from .fleet_client import FleetClient
 
-    return FleetClient.from_env()
+    return FleetClient.from_user_env()
 
 
 def _emit_json(command: str, document: dict) -> None:

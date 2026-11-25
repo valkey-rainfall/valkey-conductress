@@ -6,7 +6,7 @@ import hashlib
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Collection, Optional
 
 from .errors import AuthorizationError
 
@@ -21,6 +21,26 @@ class AuthIdentity:
     # caller's full identity (github account, quota, allowed sources, approver
     # role) for provenance and quota decisions.
     login: Optional[str] = None
+    # What a user token may do: "submit" (submit and manage own tasks) or "read"
+    # (read-only). Operator and runner tokens have no scope.
+    scope: Optional[str] = None
+
+
+USER_SCOPES = {"submit", "read"}
+DEFAULT_USER_SCOPE = "submit"
+
+
+def _parse_scope(role: str, scope: object) -> Optional[str]:
+    """Return the scope of a token record. A user token without one gets ``submit``."""
+    if role != "user":
+        if scope is not None:
+            raise ValueError("only a user token may set scope")
+        return None
+    if scope is None:
+        return DEFAULT_USER_SCOPE
+    if scope not in USER_SCOPES:
+        raise ValueError("token scope must be submit or read")
+    return str(scope)
 
 
 def hash_token(token: str) -> str:
@@ -34,7 +54,7 @@ class TokenStore:
             raise ValueError("tokens file must use schema_version 1 with a tokens array")
         self._tokens: dict[str, AuthIdentity] = {}
         for record in data["tokens"]:
-            unknown = set(record) - {"token_hash", "role", "label", "runner_id", "login"}
+            unknown = set(record) - {"token_hash", "role", "label", "runner_id", "login", "scope"}
             if unknown:
                 raise ValueError(f"unknown token fields: {', '.join(sorted(unknown))}")
             token_hash = record.get("token_hash")
@@ -58,7 +78,16 @@ class TokenStore:
                 raise ValueError("only a user token may set login")
             if token_hash in self._tokens:
                 raise ValueError("duplicate token_hash")
-            self._tokens[token_hash] = AuthIdentity(role=role, label=label, runner_id=runner_id, login=login)
+            scope = _parse_scope(role, record.get("scope"))
+            self._tokens[token_hash] = AuthIdentity(
+                role=role, label=label, runner_id=runner_id, login=login, scope=scope
+            )
+
+    def check_logins(self, known_logins: Collection[str]) -> None:
+        """Raise ValueError if a user token names a login that is not in the directory."""
+        unknown = {t.login for t in self._tokens.values() if t.login is not None} - set(known_logins)
+        if unknown:
+            raise ValueError(f"tokens name logins missing from the user directory: {', '.join(sorted(unknown))}")
 
     def authenticate(self, authorization: Optional[str]) -> AuthIdentity:
         if not authorization or not authorization.startswith("Bearer "):

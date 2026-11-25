@@ -176,7 +176,7 @@ def test_cli_flags_land_in_remote_envelope():
     argv = ["queue", "add-cachecannon", "--runner", "armbench", "--json"]
     argv += ["--workload2-connections", "40", "--workload2-threads", "2"]
     argv += ["--workload2-set-ratio", "100", "--workload2-rate", "5000"]
-    with patch("conductress.fleet_client.FleetClient.from_env", return_value=client):
+    with patch("conductress.fleet_client.FleetClient.from_user_env", return_value=client):
         assert cli.main(argv) == 0
     payload = client.submitted[0]["task"]
     assert payload["workload2_connections"] == 40
@@ -187,7 +187,7 @@ def test_cli_flags_land_in_remote_envelope():
 
 def test_cli_defaults_leave_workload2_off():
     client = _fake_client()
-    with patch("conductress.fleet_client.FleetClient.from_env", return_value=client):
+    with patch("conductress.fleet_client.FleetClient.from_user_env", return_value=client):
         assert cli.main(["queue", "add-cachecannon", "--runner", "armbench", "--json"]) == 0
     assert client.submitted[0]["task"]["workload2_connections"] == 0
 
@@ -196,7 +196,7 @@ def test_cli_rejects_bad_workload2_set_ratio(capsys):
     client = _fake_client()
     argv = ["queue", "add-cachecannon", "--runner", "armbench"]
     argv += ["--workload2-connections", "40", "--workload2-set-ratio", "150"]
-    with patch("conductress.fleet_client.FleetClient.from_env", return_value=client):
+    with patch("conductress.fleet_client.FleetClient.from_user_env", return_value=client):
         assert cli.main(argv) == 1
     assert "--workload2-set-ratio" in capsys.readouterr().err
     assert not client.submitted

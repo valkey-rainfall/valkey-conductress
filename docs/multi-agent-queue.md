@@ -1,6 +1,6 @@
 # Multi-agent queue: identity, accounting, fair share, and sweep share
 
-Status: design note. Nothing in this document is implemented yet. It describes the changes in the order they will be built, names the files they touch, and says how each one is tested.
+Status: design note. Rollout step 1 (server-set identity and token scope) is implemented; the other steps are not. It describes the changes in the order they will be built, names the files they touch, and says how each one is tested.
 
 ## 1. Purpose
 

@@ -52,6 +52,18 @@ def _require_submitter(request: web.Request) -> AuthIdentity:
     return identity
 
 
+def _require_submit_scope(request: web.Request) -> AuthIdentity:
+    """Like ``_require_submitter``, and refuse a user token whose scope is ``read``."""
+    identity = _require_submitter(request)
+    _check_write_scope(identity)
+    return identity
+
+
+def _check_write_scope(identity: AuthIdentity) -> None:
+    if identity.role == "user" and identity.scope != "submit":
+        raise AuthorizationError("SCOPE_READ_ONLY", "token scope does not allow changes")
+
+
 def _is_owner(request: web.Request) -> bool:
     """True if the caller may act on anyone's tasks.
 
@@ -75,6 +87,7 @@ def _require_approver(request: web.Request) -> AuthIdentity:
     if identity.role == "operator":
         return identity
     if identity.role == "user" and identity.login is not None:
+        _check_write_scope(identity)
         directory = request.app[SERVICE_KEY].user_directory
         if directory is not None:
             user = directory.get(identity.login)
@@ -176,6 +189,8 @@ def create_app(
     canary_profiles = canary_profiles or CanaryProfileRegistry.from_directory(config.canary_profiles_dir)
     if user_directory is None and config.users_path is not None and config.users_path.exists():
         user_directory = UserDirectory.from_file(config.users_path)
+    if user_directory is not None:
+        token_store.check_logins(user_directory.users)
     if provenance_gate is None and config.github_verification_enabled:
         provenance_gate = ProvenanceGate(RestGitHubLookup(token=config.github_token))
     service = ControlService(
@@ -271,7 +286,7 @@ async def _health(request: web.Request) -> web.Response:
 
 
 async def _submit_task(request: web.Request) -> web.Response:
-    identity = _require_submitter(request)
+    identity = _require_submit_scope(request)
     bypass = request.query.get("bypass_provenance", "").lower() in {"1", "true", "yes"}
     task, created = request.app[SERVICE_KEY].submit_task(
         await _json_body(request),
@@ -338,7 +353,7 @@ async def _reject_tasks(request: web.Request) -> web.Response:
 
 
 async def _cancel_task(request: web.Request) -> web.Response:
-    identity = _require_submitter(request)
+    identity = _require_submit_scope(request)
     is_owner = _is_owner(request)
     tasks, changed = request.app[SERVICE_KEY].cancel_task(
         request.match_info["task_id"],

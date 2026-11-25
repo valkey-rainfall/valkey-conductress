@@ -192,7 +192,7 @@ def _fake_client():
 
 def test_cli_flags_land_in_remote_envelope(capsys):
     client = _fake_client()
-    with patch("conductress.fleet_client.FleetClient.from_env", return_value=client):
+    with patch("conductress.fleet_client.FleetClient.from_user_env", return_value=client):
         result = cli.main(
             [
                 "queue",
@@ -218,7 +218,7 @@ def test_cli_flags_land_in_remote_envelope(capsys):
 
 def test_cli_defaults_unchanged_without_new_flags():
     client = _fake_client()
-    with patch("conductress.fleet_client.FleetClient.from_env", return_value=client):
+    with patch("conductress.fleet_client.FleetClient.from_user_env", return_value=client):
         assert cli.main(["queue", "add-cachecannon", "--runner", "armbench", "--json"]) == 0
     payload = client.submitted[0]["task"]
     assert payload["rate_limit"] == 0
@@ -228,7 +228,7 @@ def test_cli_defaults_unchanged_without_new_flags():
 
 def test_cli_rejects_negative_rate(capsys):
     client = _fake_client()
-    with patch("conductress.fleet_client.FleetClient.from_env", return_value=client):
+    with patch("conductress.fleet_client.FleetClient.from_user_env", return_value=client):
         assert cli.main(["queue", "add-cachecannon", "--runner", "armbench", "--rate", "-5"]) == 1
     assert "--rate" in capsys.readouterr().err
     assert not client.submitted
@@ -236,7 +236,7 @@ def test_cli_rejects_negative_rate(capsys):
 
 def test_cli_rejects_bad_info_section(capsys):
     client = _fake_client()
-    with patch("conductress.fleet_client.FleetClient.from_env", return_value=client):
+    with patch("conductress.fleet_client.FleetClient.from_user_env", return_value=client):
         assert cli.main(["queue", "add-cachecannon", "--runner", "armbench", "--info-sections", "a b"]) == 1
     assert "--info-sections" in capsys.readouterr().err
     assert not client.submitted

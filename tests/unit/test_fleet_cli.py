@@ -197,7 +197,7 @@ def test_queue_add_remote_submits_envelope_without_touching_local_queue(capsys):
     client = FakeClient()
     local_queue = MagicMock()
     with (
-        patch("conductress.fleet_client.FleetClient.from_env", return_value=client),
+        patch("conductress.fleet_client.FleetClient.from_user_env", return_value=client),
         patch("conductress.cli.TaskQueue", return_value=local_queue),
     ):
         result = cli.main(
@@ -226,7 +226,9 @@ def test_queue_add_without_routing_remains_local(capsys):
     local_queue = MagicMock()
     with (
         patch("conductress.cli.TaskQueue", return_value=local_queue),
-        patch("conductress.fleet_client.FleetClient.from_env", side_effect=AssertionError("must not contact control")),
+        patch(
+            "conductress.fleet_client.FleetClient.from_user_env", side_effect=AssertionError("must not contact control")
+        ),
     ):
         result = cli.main(["queue", "add", "--tests", "get"])
 
@@ -249,7 +251,7 @@ def test_queue_add_without_routing_remains_local(capsys):
 )
 def test_all_task_handlers_submit_remotely(argv, capsys):
     client = FakeClient()
-    with patch("conductress.fleet_client.FleetClient.from_env", return_value=client):
+    with patch("conductress.fleet_client.FleetClient.from_user_env", return_value=client):
         result = cli.main([*argv, "--runner", "armbench", "--json"])
 
     assert result == 0
@@ -267,7 +269,7 @@ def test_partial_remote_batch_failure_reports_submitted_ids(capsys):
             return super().submit_task(envelope, idempotency_key)
 
     client = FlakyClient()
-    with patch("conductress.fleet_client.FleetClient.from_env", return_value=client):
+    with patch("conductress.fleet_client.FleetClient.from_user_env", return_value=client):
         result = cli.main(
             [
                 "queue",
