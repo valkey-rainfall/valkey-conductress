@@ -29,6 +29,17 @@ from conductress.heap_profiler import (
     cleanup_heap_dumps,
     collect_heap_profile,
 )
+from conductress.memory_record import (
+    build_memory_record,
+    collect_config,
+    collect_encoding,
+    collect_identity,
+    collect_profiling_state,
+    conductress_revision,
+    read_proc_status,
+    sample_values,
+    take_sample,
+)
 from conductress.server import Server
 from conductress.sweep.populator import populate, touch
 from conductress.task_queue import BaseTaskData, BaseTaskRunner
@@ -511,6 +522,12 @@ class MemTaskRunner(BaseTaskRunner):
             self.commit_hash = valkey.get_build_hash()
 
             before_memory: dict[str, str] = await valkey.info("memory")
+            sample_before = sample_values(before_memory, await read_proc_status(valkey))
+
+            # What this run measures: the engine and binary that answered, and whether the
+            # allocator was profiling. Every step is optional; None means "not reported".
+            identity = await collect_identity(valkey, self.cached_binary_path)
+            profiling_state = await collect_profiling_state(valkey)
 
             count = MEM_TEST_ITEM_COUNT
             from conductress.sweep.memory_coordinator import MemoryWorkload  # noqa: E402 (circular import)
@@ -527,6 +544,7 @@ class MemTaskRunner(BaseTaskRunner):
                 populate_mode=self.populate_mode,
             )
             populate(valkey.ip, valkey.port, workload)
+            sample_filled = await take_sample(valkey)
 
             # Opt-in: let background memory reclamation (e.g. zset compaction) settle
             # so we sample steady-state memory rather than the post-populate transient.
@@ -616,8 +634,9 @@ class MemTaskRunner(BaseTaskRunner):
                     self.logger.warning("used_memory was still moving at the timeout (port %d)", port)
 
             after_memory: dict[str, str] = await valkey.info("memory")
+            sample_after = sample_values(after_memory, await read_proc_status(valkey))
 
-            (key_count, expire_count) = await valkey.count_items_expires()
+            key_count, expire_count = await valkey.count_items_expires()
             if self.test == "set":
                 # SET creates one key per item
                 item_count = key_count
@@ -648,6 +667,10 @@ class MemTaskRunner(BaseTaskRunner):
             else:
                 if expire_count != 0:
                     raise RuntimeError(f"Expected 0 expires but found {expire_count} on port {port}")
+
+            # Facts about the finished structure, read while the server is still up.
+            key_encoding = await collect_encoding(valkey, self.test)
+            memory_config = await collect_config(valkey)
 
             await valkey.stop()  # required cleanup, release CPU allocations, etc
 
@@ -683,7 +706,25 @@ class MemTaskRunner(BaseTaskRunner):
             per_key = float(total_usage) / item_count  # queried cardinality (exact for all modes)
             per_item_overhead = per_key - user_data_per_item
 
+            memory_record = build_memory_record(
+                engine=identity["engine"],
+                binary_sha256=identity["binary_sha256"],
+                version_text=identity["version_text"],
+                profiling_requested=self.enable_profiling,
+                profiling_active_at_runtime=profiling_state,
+                settle_requested=self.settle,
+                settle_passes=rehash_passes,
+                settle_key_check=settle_key_check,
+                settle_stability=settle_stability["verdict"] if settle_stability else None,
+                encoding=key_encoding or settle_key_encoding,
+                config=memory_config,
+                item_count=item_count,
+                samples={"before_fill": sample_before, "after_fill": sample_filled, "after_settle": sample_after},
+                conductress_revision=conductress_revision(),
+            )
+
             result = {
+                "memory_record": memory_record,
                 "before_memory": before_memory,
                 "after_memory": after_memory,
                 "has_expire": self.has_expire,

@@ -532,6 +532,14 @@ def build_parser() -> argparse.ArgumentParser:
         "fail the task if DEBUG HTSTATS still shows a rehash in progress. Default off.",
     )
 
+    mem_parser.add_argument(
+        "--breakdown",
+        action="store_true",
+        help="Run with jemalloc heap profiling to record the per-structure breakdown (Valkey). "
+        "Without this flag the task runs unprofiled, so used_memory and RSS are both valid. A "
+        "breakdown run's RSS is inflated by profiler metadata and is recorded as invalid.",
+    )
+
     # queue add-mixed
     mixed_parser = queue_sub.add_parser(
         "add-mixed",
@@ -2130,16 +2138,16 @@ def handle_queue_add_memory(args: argparse.Namespace) -> int:
         task = MemTaskData(
             source=args.source,
             specifier=args.specifier,
-            # enable_profiling below is only effective when the binary is built with
-            # jemalloc profiling; without this the task silently records breakdown=None.
-            make_args=with_jemalloc_prof(args.make_args),
+            # A breakdown run needs a binary built with jemalloc profiling; without it the
+            # task silently records breakdown=None. The default run is unprofiled.
+            make_args=with_jemalloc_prof(args.make_args) if args.breakdown else args.make_args,
             topology=TopologySpec.standalone(),
             note=args.note or f"manual mem-{wl.command}",
             requirements={},
             type=wl.command,
             val_sizes=[wl.value_size],
             has_expire=wl.has_expire,
-            enable_profiling=True,
+            enable_profiling=args.breakdown,
             key_size=wl.key_size,
             field_size=wl.field_size,
             user_data_bytes=wl.user_data_bytes,

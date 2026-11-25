@@ -134,21 +134,33 @@ class MemorySweepCoordinator(BaseSweepCoordinator):
             repo=engine_repo_slug(self.engine),
             engine=self.engine,
             settled=True,
+            user_data_bytes=self._workload.user_data_bytes,
+            item_count=self._workload.item_count,
+            profiled=False,
         )
         return sum(1 for p in self.state.points.values() if p.value is not None)
 
     def _create_task(self, sweep_task: SweepTask) -> MemTaskData:
+        """The measuring task: unprofiled, so used_memory and RSS are both valid."""
+        return self._make_task(sweep_task.commit, sweep_task.reason, breakdown=False)
+
+    def _make_task(self, commit: str, reason: str, *, breakdown: bool) -> MemTaskData:
+        """A memory task for one commit. ``breakdown`` runs it under jemalloc heap profiling."""
+        make_args = with_jemalloc_prof(self._sweep_make_args) if breakdown else self._sweep_make_args
         return MemTaskData(
             source=self._sweep_source,
-            specifier=sweep_task.commit,
-            make_args=with_jemalloc_prof(self._sweep_make_args),
+            specifier=commit,
+            make_args=make_args,
             topology=TopologySpec.standalone(),
-            note=f"[memory-sweep:{self._workload.label}] {sweep_task.reason}",
+            note=f"[memory-sweep:{self._workload.label}] {reason}",
             requirements={},
             type=self._workload.command,
             val_sizes=[self._workload.value_size],
             has_expire=self._workload.has_expire,
-            enable_profiling=True,
+            # Profiling inflates RSS about 100x (profiler metadata), so the measuring run never
+            # profiles. The per-structure breakdown comes from a separate task (see
+            # _queue_breakdown_if_due) that only the engines that publish it get.
+            enable_profiling=breakdown,
             key_size=self._workload.key_size,
             field_size=self._workload.field_size,
             user_data_bytes=self._workload.user_data_bytes,
@@ -195,6 +207,24 @@ class MemorySweepCoordinator(BaseSweepCoordinator):
                 continue
         return None
 
+    def _extract_memory_record(self, task: BaseTaskData) -> Optional[dict]:
+        """Extract the task's memory record (identity, settle, used_memory and RSS samples)."""
+
+        output_file = CONDUCTRESS_RESULTS / "output.jsonl"
+        if not output_file.exists():
+            return None
+
+        for line in reversed(output_file.read_text().strip().splitlines()):
+            try:
+                entry = json.loads(line)
+                if entry.get("task_id") == task.task_id:
+                    results = entry.get("data", {}).get("results", [])
+                    record = results[0].get("memory_record") if results else None
+                    return record if isinstance(record, dict) else None
+            except (ValueError, KeyError, TypeError):
+                continue
+        return None
+
     def _extract_breakdown(self, task: BaseTaskData) -> Optional[dict[str, float]]:
         """Extract per-category breakdown from the task output."""
 
@@ -234,8 +264,12 @@ class MemorySweepCoordinator(BaseSweepCoordinator):
         return None
 
     def on_task_completed(self, task: BaseTaskData) -> None:
-        """Override to attach breakdown and raw stacks to the recorded point."""
+        """Record the measuring task's point; a breakdown task only adds the breakdown to its point."""
         if not self._is_my_task(task):
+            return
+        if task.enable_profiling:  # type: ignore[attr-defined]
+            self._attach_breakdown(task)
+            self.queue_next_if_needed()
             return
 
         result = self._extract_result(task)
@@ -244,19 +278,62 @@ class MemorySweepCoordinator(BaseSweepCoordinator):
             self.record_result(task.sweep_commit, value, cv, reps)  # type: ignore[attr-defined]
             self._annotate_point(task)
 
-            breakdown = self._extract_breakdown(task)
-            raw_stacks = self._extract_raw_stacks(task)
-            if task.sweep_commit in self.state.points:  # type: ignore[attr-defined]
-                if breakdown:
-                    self.state.points[task.sweep_commit].breakdown = breakdown  # type: ignore[attr-defined]
-                if raw_stacks:
-                    self.state.points[task.sweep_commit].raw_stacks = raw_stacks  # type: ignore[attr-defined]
+            record = self._extract_memory_record(task)
+            point = self.state.points.get(task.sweep_commit)  # type: ignore[attr-defined]
+            if point is not None and record is not None:
+                point.memory_record = record
                 self.state.save(self.state_file)
-                logger.info("Recorded breakdown for %s [%s]", task.sweep_commit[:8], self._workload.label)  # type: ignore[attr-defined]
+            self._queue_breakdown_if_due(task.sweep_commit)  # type: ignore[attr-defined]
         else:
             commit = getattr(task, "sweep_commit", "?")
             logger.warning("Could not extract result for %s [%s]", commit[:8], self._workload.label)
         self.queue_next_if_needed()
+
+    def on_task_failed(self, task: BaseTaskData) -> None:
+        """A failed breakdown task must not mark the commit's measured point as failed."""
+        if self._is_my_task(task) and task.enable_profiling:  # type: ignore[attr-defined]
+            logger.warning("Breakdown task failed for %s [%s]", task.sweep_commit[:8], self._workload.label)  # type: ignore[attr-defined]
+            return
+        super().on_task_failed(task)
+
+    def _attach_breakdown(self, task: BaseTaskData) -> None:
+        """Store the breakdown and raw stacks of a breakdown task on the commit's measured point."""
+        commit = task.sweep_commit  # type: ignore[attr-defined]
+        point = self.state.points.get(commit)
+        if point is None:
+            logger.warning("Breakdown for %s [%s] has no measured point; dropped", commit[:8], self._workload.label)
+            return
+        breakdown = self._extract_breakdown(task)
+        raw_stacks = self._extract_raw_stacks(task)
+        if breakdown:
+            point.breakdown = breakdown
+        if raw_stacks:
+            point.raw_stacks = raw_stacks
+        if breakdown or raw_stacks:
+            self.state.save(self.state_file)
+            logger.info("Recorded breakdown for %s [%s]", commit[:8], self._workload.label)
+
+    def _breakdown_due(self, commit: str) -> bool:
+        """True when ``commit`` is a tip point of an engine that publishes a breakdown, and no
+        point from the same commit date or later has one. That is at most one breakdown task per
+        calendar day of tip commit dates for each series."""
+        from conductress.config import should_profile_internals
+
+        point = self.state.points.get(commit)
+        if point is None or point.sample != "tip" or not should_profile_internals(self.engine):
+            return False
+        newest = max((p.date for p in self.state.points.values() if p.breakdown and p.date), default="")
+        return point.date > newest
+
+    def _queue_breakdown_if_due(self, commit: str) -> None:
+        if not self._breakdown_due(commit):
+            return
+        from conductress.task_queue import TaskQueue
+
+        task = self._make_task(commit, "heap breakdown for tip point", breakdown=True)
+        task.sweep_commit = commit
+        TaskQueue().submit_task(task)
+        logger.info("[sweep] Queued breakdown task: %s %s", self.workload_id, commit[:8])
 
 
 def create_memory_coordinators(repo_path: Path, engine: Optional[SweepEngine] = None) -> list[MemorySweepCoordinator]:

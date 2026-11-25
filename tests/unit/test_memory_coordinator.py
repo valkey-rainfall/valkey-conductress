@@ -86,7 +86,7 @@ class TestTaskCreation:
         assert task.type == "set"
         assert task.val_sizes == [64]
         assert task.has_expire is False
-        assert task.enable_profiling is True
+        assert task.enable_profiling is False  # the measuring run never profiles
         assert "[memory-sweep:set-v64]" in task.note
 
 
@@ -101,6 +101,7 @@ def _mem_task(**overrides):
         key_size=16,
         field_size=0,
         settle=True,
+        enable_profiling=False,
     )
     fields.update(overrides)
     task = MagicMock(spec=MemTaskData)
@@ -273,29 +274,46 @@ class TestBreakdownExtraction:
 
 
 class TestOnTaskCompleted:
-    def test_records_result_and_breakdown(self, coordinator, tmp_path):
-        """Full flow: task completes → result recorded → breakdown attached → state saved."""
+    def test_breakdown_task_attaches_breakdown_to_measured_point(self, coordinator, tmp_path):
+        """A breakdown task adds the breakdown to the point the measuring task recorded.
+
+        It never changes the point's value: the profiled run only supplies the breakdown.
+        """
         output_file = tmp_path / "results" / "output.jsonl"
         output_file.parent.mkdir(parents=True)
         entry = {
-            "task_id": "test_task",
-            "score": 30.92,
+            "task_id": "breakdown_task",
+            "score": 99.0,
             "data": {"results": [{"breakdown": {"robj_embval": 48.0, "hashtable": 12.8, "other": 0.1}}]},
         }
         output_file.write_text(json.dumps(entry) + "\n")
+        coordinator.record_result("aaa", 30.92, 0.0, 1)
 
-        task = _mem_task(task_id="test_task", sweep_commit="aaa")
-
+        task = _mem_task(task_id="breakdown_task", sweep_commit="aaa", enable_profiling=True)
         with patch("conductress.sweep.memory_coordinator.CONDUCTRESS_RESULTS", tmp_path / "results"):
             coordinator.on_task_completed(task)
 
-        # Verify result was recorded
-        assert "aaa" in coordinator.state.points
         point = coordinator.state.points["aaa"]
         assert point.value == 30.92
-
-        # Verify breakdown was attached
         assert point.breakdown == {"robj_embval": 48.0, "hashtable": 12.8, "other": 0.1}
+
+    def test_breakdown_task_without_measured_point_is_dropped(self, coordinator, tmp_path):
+        output_file = tmp_path / "results" / "output.jsonl"
+        output_file.parent.mkdir(parents=True)
+        entry = {"task_id": "b", "score": 99.0, "data": {"results": [{"breakdown": {"other": 0.1}}]}}
+        output_file.write_text(json.dumps(entry) + "\n")
+
+        task = _mem_task(task_id="b", sweep_commit="zzz", enable_profiling=True)
+        with patch("conductress.sweep.memory_coordinator.CONDUCTRESS_RESULTS", tmp_path / "results"):
+            coordinator.on_task_completed(task)
+
+        assert "zzz" not in coordinator.state.points
+
+    def test_failed_breakdown_task_does_not_fail_the_point(self, coordinator):
+        coordinator.record_result("aaa", 30.92, 0.0, 1)
+        task = _mem_task(task_id="b", sweep_commit="aaa", enable_profiling=True)
+        coordinator.on_task_failed(task)
+        assert coordinator.state.points["aaa"].is_complete
 
     def test_records_result_without_breakdown(self, coordinator, tmp_path):
         """Result recorded even when breakdown is missing."""
@@ -415,13 +433,28 @@ class TestEngineSupport:
         task = redis_coordinator._create_task(sweep_task)
         assert task.source == "redis"
 
-    def test_create_task_make_args_include_jemalloc_prof(self, redis_coordinator):
+    def test_create_task_is_unprofiled(self, redis_coordinator):
         from conductress.heap_profiler import JEMALLOC_PROF_CONFIGURE_OPTS
         from conductress.sweep.planner import SweepTask, TaskPriority
 
         sweep_task = SweepTask(commit="abc123", date="2024-01-01", priority=TaskPriority.BACKFILL, reason="test")
         task = redis_coordinator._create_task(sweep_task)
+        assert JEMALLOC_PROF_CONFIGURE_OPTS not in task.make_args
+        assert task.enable_profiling is False
+
+    def test_breakdown_task_is_profiled(self, redis_coordinator):
+        from conductress.heap_profiler import JEMALLOC_PROF_CONFIGURE_OPTS
+
+        task = redis_coordinator._make_task("abc123", "heap breakdown", breakdown=True)
         assert JEMALLOC_PROF_CONFIGURE_OPTS in task.make_args
+        assert task.enable_profiling is True
+
+    def test_engine_without_internal_profiling_never_gets_one(self, redis_coordinator):
+        redis_coordinator.record_result("abc123", 54.9, 0.0, 1)
+        point = redis_coordinator.state.points["abc123"]
+        point.sample = "tip"
+        point.date = "2024-03-01"
+        assert redis_coordinator._breakdown_due("abc123") is False
 
     def test_is_my_task_matches_engine_source(self, redis_coordinator):
         assert redis_coordinator._is_my_task(_mem_task(sweep_commit="abc123", source="redis")) is True
@@ -441,3 +474,99 @@ class TestEngineSupport:
         # State files should have redis prefix
         for c in coordinators:
             assert "redis-" in c.state_file.name
+
+
+class TestMemoryRecordAndBreakdownSplit:
+    """The measuring task stores its record; the heap breakdown is a separate tip-only task."""
+
+    def _write_output(self, tmp_path, entry):
+        output_file = tmp_path / "results" / "output.jsonl"
+        output_file.parent.mkdir(parents=True, exist_ok=True)
+        output_file.write_text(json.dumps(entry) + "\n")
+
+    def test_measuring_task_stores_the_memory_record(self, coordinator, tmp_path):
+        record = {"engine": {"server_name": "valkey"}, "total_bytes_per_item": 110.9}
+        self._write_output(
+            tmp_path,
+            {"task_id": "t1", "score": 30.9, "data": {"results": [{"memory_record": record}]}},
+        )
+        task = _mem_task(task_id="t1", sweep_commit="aaa")
+        with patch("conductress.sweep.memory_coordinator.CONDUCTRESS_RESULTS", tmp_path / "results"):
+            coordinator.on_task_completed(task)
+        assert coordinator.state.points["aaa"].memory_record == record
+
+    def test_result_without_record_still_recorded(self, coordinator, tmp_path):
+        self._write_output(tmp_path, {"task_id": "t1", "score": 30.9, "data": {"results": [{}]}})
+        task = _mem_task(task_id="t1", sweep_commit="aaa")
+        with patch("conductress.sweep.memory_coordinator.CONDUCTRESS_RESULTS", tmp_path / "results"):
+            coordinator.on_task_completed(task)
+        point = coordinator.state.points["aaa"]
+        assert point.value == 30.9
+        assert point.memory_record is None
+
+    def test_breakdown_task_leaves_the_record_alone(self, coordinator, tmp_path):
+        coordinator.record_result("aaa", 30.9, 0.0, 1)
+        coordinator.state.points["aaa"].memory_record = {"total_bytes_per_item": 110.9}
+        self._write_output(
+            tmp_path,
+            {
+                "task_id": "b1",
+                "score": 31.0,
+                "data": {"results": [{"memory_record": {"total_bytes_per_item": 1.0}, "breakdown": {"sds": 1.0}}]},
+            },
+        )
+        task = _mem_task(task_id="b1", sweep_commit="aaa", enable_profiling=True)
+        with patch("conductress.sweep.memory_coordinator.CONDUCTRESS_RESULTS", tmp_path / "results"):
+            coordinator.on_task_completed(task)
+        point = coordinator.state.points["aaa"]
+        assert point.memory_record == {"total_bytes_per_item": 110.9}
+        assert point.breakdown == {"sds": 1.0}
+
+    def _tip_point(self, coordinator, commit="ccc", date="2024-03-01", sample="tip"):
+        coordinator.record_result(commit, 30.9, 0.0, 1)
+        point = coordinator.state.points[commit]
+        point.sample = sample
+        point.date = date
+        return point
+
+    def test_breakdown_due_on_first_tip_point(self, coordinator):
+        self._tip_point(coordinator)
+        assert coordinator._breakdown_due("ccc") is True
+
+    def test_breakdown_not_due_for_history_point(self, coordinator):
+        self._tip_point(coordinator, sample="history")
+        assert coordinator._breakdown_due("ccc") is False
+
+    def test_breakdown_at_most_once_per_commit_date(self, coordinator):
+        self._tip_point(coordinator, commit="bbb", date="2024-03-01").breakdown = {"sds": 1.0}
+        self._tip_point(coordinator, commit="ccc", date="2024-03-01")
+        assert coordinator._breakdown_due("ccc") is False
+        self._tip_point(coordinator, commit="ddd", date="2024-03-02")
+        assert coordinator._breakdown_due("ddd") is True
+
+    def test_due_breakdown_is_queued_as_a_profiled_task(self, coordinator):
+        self._tip_point(coordinator)
+        queue = MagicMock()
+        with patch("conductress.task_queue.TaskQueue", return_value=queue):
+            coordinator._queue_breakdown_if_due("ccc")
+        task = queue.submit_task.call_args[0][0]
+        assert task.enable_profiling is True
+        assert task.sweep_commit == "ccc"
+        assert task.specifier == "ccc"
+        assert task.settle is True
+
+    def test_nothing_queued_when_not_due(self, coordinator):
+        self._tip_point(coordinator, sample="history")
+        queue = MagicMock()
+        with patch("conductress.task_queue.TaskQueue", return_value=queue):
+            coordinator._queue_breakdown_if_due("ccc")
+        queue.submit_task.assert_not_called()
+
+    def test_export_passes_series_memory_metadata(self, coordinator, tmp_path):
+        out = tmp_path / "series.json"
+        coordinator.record_result("aaa", 30.9, 0.0, 1)
+        coordinator.export(out, "arm64")
+        meta = json.loads(out.read_text())["metadata"]
+        assert meta["user_data_bytes"] == 80
+        assert meta["item_count"] == 5_000_000
+        assert meta["profiled"] is False

@@ -804,11 +804,27 @@ class TestQueueAddMemorySubcommand:
         mock_queue = MagicMock()
         mock_queue_cls.return_value = mock_queue
 
-        exit_code = main(["queue", "add-memory", "--source", "repo1", "--specifier", "x", "--types", "set"])
+        exit_code = main(
+            ["queue", "add-memory", "--source", "repo1", "--specifier", "x", "--types", "set", "--breakdown"]
+        )
         assert exit_code == 0
         task = mock_queue.submit_task.call_args[0][0]
         assert task.enable_profiling is True
         assert JEMALLOC_PROF_CONFIGURE_OPTS in task.make_args
+
+    @patch("conductress.cli.TaskQueue")
+    def test_add_memory_default_is_unprofiled(self, mock_queue_cls):
+        """Without --breakdown the task runs unprofiled, so used_memory and RSS are both valid."""
+        from conductress.heap_profiler import JEMALLOC_PROF_CONFIGURE_OPTS
+
+        mock_queue = MagicMock()
+        mock_queue_cls.return_value = mock_queue
+
+        exit_code = main(["queue", "add-memory", "--source", "repo1", "--specifier", "x", "--types", "set"])
+        assert exit_code == 0
+        task = mock_queue.submit_task.call_args[0][0]
+        assert task.enable_profiling is False
+        assert JEMALLOC_PROF_CONFIGURE_OPTS not in task.make_args
 
     @patch("conductress.cli.TaskQueue")
     def test_add_memory_user_make_args_kept_alongside_prof_flag(self, mock_queue_cls):
@@ -830,6 +846,7 @@ class TestQueueAddMemorySubcommand:
                 "set",
                 "--make-args",
                 "MALLOC=jemalloc",
+                "--breakdown",
             ]
         )
         assert exit_code == 0
