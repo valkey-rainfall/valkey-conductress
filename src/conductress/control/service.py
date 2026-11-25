@@ -199,6 +199,9 @@ class ControlService:
         each client value that was replaced.
         """
         is_operator = identity_login is None
+        if not is_operator and envelope["task_class"] != "manual":
+            # Canary and sweep tasks skip the approval and quota hold, so only an operator may send them.
+            raise AuthorizationError("TASK_CLASS_OPERATOR_ONLY", "a user token may submit manual tasks only")
         server_by = actor if is_operator else identity_login
         detail: dict[str, Any] = {}
         if envelope["submitted_by"] != server_by:
@@ -635,6 +638,16 @@ class ControlService:
     # States a caller may still cancel outright (nothing has been handed to a
     # runner yet). Others require the softer cancel-requested path.
     _UNCLAIMED_CANCELLABLE = ("queued", "pending-approval")
+    _IN_FLIGHT_STATES = ("claimed", "accepted", "cancel-requested")
+
+    @classmethod
+    def _cancel_refusal(cls, row: sqlite3.Row, login: Optional[str]) -> Optional[str]:
+        """Return why a non-operator may not cancel this task, or None if it may."""
+        if login is None or row["submitter_login"] != login:
+            return "not_yours"
+        if row["state"] in cls._IN_FLIGHT_STATES:
+            return "already_running"
+        return None
 
     def cancel_task(
         self,
@@ -642,30 +655,38 @@ class ControlService:
         *,
         actor: str,
         identity_login: Optional[str] = None,
-        is_owner: bool = True,
-    ) -> tuple[list[dict[str, Any]], int]:
-        """Cancel a caller's tasks by task ID or batch ID.
+        is_operator: bool = True,
+    ) -> tuple[list[dict[str, Any]], int, dict[str, Any]]:
+        """Cancel tasks by task ID or batch ID.
 
-        A caller cancels their own tasks; an owner (or an operator, the default)
-        may cancel anyone's. An unclaimed task (queued or pending-approval) is
-        cancelled outright; a task already handed to a runner (claimed,
-        accepted) is marked cancel-requested so the runner stops at its next
-        boundary. Terminal tasks are left unchanged. Returns the affected task
-        rows and a count of state changes.
+        An operator may cancel any task. Anyone else may cancel only their own
+        tasks, and only while they are unclaimed. An unclaimed task (queued or
+        pending-approval) is cancelled outright; for an operator, a task already
+        handed to a runner (claimed, accepted) is marked cancel-requested so the
+        runner stops at its next boundary. Terminal tasks are left unchanged.
+
+        Returns the affected task rows, a count of state changes, and what was
+        skipped for a non-operator: ``not_yours`` (a count, so other logins'
+        task IDs are not shown) and ``already_running`` (own task IDs). A
+        non-operator gets back only their own task rows.
         """
         audits = []
         changed = 0
+        skipped: dict[str, Any] = {"not_yours": 0, "already_running": []}
         with self.database.transaction(immediate=True) as connection:
             rows = connection.execute(
                 "SELECT * FROM tasks WHERE task_id = ? OR batch_id = ?", (selector, selector)
             ).fetchall()
             if not rows:
                 raise NotFoundError("TASK_NOT_FOUND", f"unknown task or batch: {selector}")
-            affected: list[str] = []
             now = utc_text()
             for row in rows:
-                if not is_owner and identity_login is not None and row["submitter_login"] != identity_login:
-                    # A non-owner may only cancel their own tasks; skip others in a batch.
+                refusal = None if is_operator else self._cancel_refusal(row, identity_login)
+                if refusal == "not_yours":
+                    skipped["not_yours"] += 1
+                    continue
+                if refusal == "already_running":
+                    skipped["already_running"].append(row["task_id"])
                     continue
                 state = row["state"]
                 if state in self._UNCLAIMED_CANCELLABLE:
@@ -690,16 +711,17 @@ class ControlService:
                         new_state=new_state,
                     )
                 )
-                affected.append(row["task_id"])
                 changed += 1
-            placeholders = ",".join("?" for _ in {row["task_id"] for row in rows})
+            task_ids = {row["task_id"] for row in rows}
+            placeholders = ",".join("?" for _ in task_ids)
             updated_rows = connection.execute(
-                f"SELECT * FROM tasks WHERE task_id IN ({placeholders})",
-                tuple({row["task_id"] for row in rows}),
+                f"SELECT * FROM tasks WHERE task_id IN ({placeholders})", tuple(task_ids)
             ).fetchall()
         for audit in audits:
             self.database.append_audit_jsonl(audit)
-        return [self._task_from_row(row) for row in updated_rows], changed
+        if not is_operator:
+            updated_rows = [row for row in updated_rows if row["submitter_login"] == identity_login]
+        return [self._task_from_row(row) for row in updated_rows], changed, skipped
 
     def list_mine(self, login: str, *, limit: int = 100) -> list[dict[str, Any]]:
         """Return the tasks a login submitted, most recent first."""

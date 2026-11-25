@@ -137,7 +137,7 @@ queued -> cancelled
 pending-approval -> queued        (approved)
 pending-approval -> cancelled     (rejected)
 queued | pending-approval -> cancelled          (caller cancels an unclaimed task)
-claimed | accepted -> cancel-requested          (caller cancels an in-flight task)
+claimed | accepted -> cancel-requested          (an operator cancels an in-flight task)
 ```
 
 `POST .../claim` is idempotent for a runner while its transfer lease is active: repeated requests return the same task and claim token. The runner persists the task locally, then sends the token to `POST .../accept`. No heartbeat or lease renewal occurs after acceptance.
@@ -150,7 +150,7 @@ A directory of users and agents (`users.toml`, path from `USERS_PATH`) maps a be
 
 A `user` token also has a `scope`: `submit` (the default, so a token written before scopes existed keeps working) or `read`. A `read` token can read task and batch status but cannot submit, cancel, approve or reject (`403 SCOPE_READ_ONLY`). `scope` is rejected on operator and runner tokens. At start the service refuses a `tokens.json` that names a login missing from `users.toml`.
 
-The server decides who submitted a task. A `user` token stores `submitted_by` as its login and rebuilds the `submitter` block from `users.toml`. An operator token stores `operator:<label>`. The client value is ignored, and the audit entry of `task.submit` records it as `detail.client_submitted_by` when it differs. A `user` token always gets priority 100; a different client value is recorded as `detail.client_priority`. Only an operator token may set another priority.
+The server decides who submitted a task. A `user` token stores `submitted_by` as its login and rebuilds the `submitter` block from `users.toml`. An operator token stores `operator:<label>`. The client value is ignored, and the audit entry of `task.submit` records it as `detail.client_submitted_by` when it differs. A `user` token may submit only `manual` tasks (`403 TASK_CLASS_OPERATOR_ONLY` for `canary` or `sweep`, which skip the approval hold). A `user` token always gets priority 100; a different client value is recorded as `detail.client_priority`. Only an operator token may set another priority.
 
 When provenance verification is enabled (`PROVENANCE_VERIFICATION=true`, with a `GITHUB_TOKEN` for a higher rate limit), a submission's `provenance.sha` is accepted only if it is reachable from an allowlisted repository (the two project repositories plus the submitter's own fork) or is the head of an open pull request against the upstream project; the verified pull-request identity is stored on the envelope. An owner may bypass with `?bypass_provenance=true`. A rejected sha returns `PROVENANCE_REJECTED`.
 
@@ -167,7 +167,7 @@ GET  /api/v1/batches/{batch_id}    (tasks sharing a batch id)
 DELETE /api/v1/tasks/{selector}    (cancel a task or whole batch)
 ```
 
-`selector` is a task ID or a batch ID. Cancelling an unclaimed task (`queued` or `pending-approval`) cancels it outright; cancelling an in-flight task (`claimed` or `accepted`) marks it `cancel-requested`, and the runner stops at its next rep/cell boundary. A non-owner may cancel only their own tasks; an owner or operator may cancel anyone's. The `conductress queue cancel|mine|pending|approve|reject` commands and `queue add* --batch` are thin clients over these routes.
+`selector` is a task ID or a batch ID. Cancelling an unclaimed task (`queued` or `pending-approval`) cancels it outright; cancelling an in-flight task (`claimed` or `accepted`) marks it `cancel-requested`, and the runner stops at its next rep/cell boundary. Only an operator token may cancel another login's task or an in-flight one. Any other token cancels only its own tasks, and only while they are `queued` or `pending-approval`; the `owner` directory role gives no extra cancel power. The response has `tasks` (only the caller's own rows for a non-operator token), `changed`, and `skipped`: `not_yours` is a count of other logins' tasks that were left alone (their IDs are not shown) and `already_running` lists the caller's own tasks that an operator must cancel. The `conductress queue cancel|mine|pending|approve|reject` commands and `queue add* --batch` are thin clients over these routes.
 
 ### Approval notification hook
 

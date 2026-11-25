@@ -103,8 +103,8 @@ def test_fail_outcome_and_wrong_runner_rejected(control_env):
 def test_cancel_unclaimed_and_claimed(control_env):
     service = control_env["service"]
     service.submit_task(task_envelope(), actor="operator:test")
-    tasks, changed = service.cancel_task("task-1", actor="operator:test")
-    replay, replay_changed = service.cancel_task("task-1", actor="operator:test")
+    tasks, changed, _ = service.cancel_task("task-1", actor="operator:test")
+    replay, replay_changed, _ = service.cancel_task("task-1", actor="operator:test")
     assert changed == 1
     assert replay_changed == 0  # already cancelled, nothing to change
     assert tasks[0]["state"] == "cancelled"
@@ -114,7 +114,7 @@ def test_cancel_unclaimed_and_claimed(control_env):
     # the runner stops at its next boundary.
     service.submit_task(task_envelope("task-2"), actor="operator:test")
     service.claim_task("armbench", actor="runner:armbench")
-    tasks2, changed2 = service.cancel_task("task-2", actor="operator:test")
+    tasks2, changed2, _ = service.cancel_task("task-2", actor="operator:test")
     assert changed2 == 1
     assert tasks2[0]["state"] == "cancel-requested"
 
