@@ -381,3 +381,45 @@ def unknown_canary_keys(status: Dict[str, Any]) -> List[str]:
         check_observation(entry.get("latest_observation"), f"{path}.latest_observation")
         check(entry.get("calibration_report"), CANARY_REPORT_KEYS, f"{path}.calibration_report")
     return unknown
+
+
+# ------------------------------------------------------------ usage summary
+
+# usage/summary.json: runner time per platform and day. No login, runner id,
+# batch id, note or free text: a platform label is the most specific name.
+USAGE_SUMMARY_KEYS = frozenset({"schema_version", "generated_at", "window_days", "platforms"})
+USAGE_PLATFORM_KEYS = frozenset({"platform", "queue_depth", "days"})
+USAGE_DAY_KEYS = frozenset({"date", "runner_seconds", "task_count", "median_wait_seconds"})
+USAGE_CLASS_KEYS = frozenset({"manual", "canary", "sweep", "local"})
+
+
+def public_usage_summary(summary: Dict[str, Any]) -> Dict[str, Any]:
+    """The public projection of the usage summary: allowlisted keys only, the platform label checked as text."""
+    public = _pick(summary, USAGE_SUMMARY_KEYS) or {}
+    platforms = []
+    for entry in summary.get("platforms", []):
+        item = _pick(entry, USAGE_PLATFORM_KEYS) or {}
+        label = public_text(item.get("platform"), max_chars=80)
+        item["platform"] = "unknown" if label in (None, WITHHELD) else label
+        days = []
+        for day in entry.get("days", []):
+            shown = _pick(day, USAGE_DAY_KEYS) or {}
+            for key in ("runner_seconds", "task_count"):
+                shown[key] = {c: v for c, v in sorted((shown.get(key) or {}).items()) if c in USAGE_CLASS_KEYS}
+            days.append(shown)
+        item["days"] = days
+        platforms.append(item)
+    public["platforms"] = platforms
+    return public
+
+
+def unknown_usage_keys(summary: Dict[str, Any]) -> List[str]:
+    """Keys of a usage summary that the allowlist has not decided on (a test fails on any)."""
+    unknown: List[str] = [f"summary.{k}" for k in summary if k not in USAGE_SUMMARY_KEYS]
+    for entry in summary.get("platforms", []):
+        unknown += [f"platform.{k}" for k in entry if k not in USAGE_PLATFORM_KEYS]
+        for day in entry.get("days", []):
+            unknown += [f"day.{k}" for k in day if k not in USAGE_DAY_KEYS]
+            for key in ("runner_seconds", "task_count"):
+                unknown += [f"day.{key}.{c}" for c in (day.get(key) or {}) if c not in USAGE_CLASS_KEYS]
+    return unknown

@@ -16,7 +16,7 @@ from jsonschema import Draft202012Validator, FormatChecker
 from jsonschema.exceptions import ValidationError
 
 from ..duration_estimator import estimate_task_duration_seconds
-from ..public_fields import public_canary_status
+from ..public_fields import public_canary_status, public_usage_summary
 from ..task_envelope import DEFAULT_PRIORITY
 from .canary_profiles import CanaryProfileRegistry
 from .db import ControlDatabase, parse_utc, utc_now, utc_text
@@ -25,7 +25,16 @@ from .errors import AuthorizationError, ConflictError, ControlError, NotFoundErr
 from .fleet_registry import FleetRegistry
 from .provenance import ProvenanceGate, ProvenanceVerdict
 from .schema import load_schema
-from .usage import insert_usage, seconds_between, usage_from_task_row
+from .usage import (
+    REPORT_GROUPS,
+    SUMMARY_WINDOW_DAYS,
+    build_public_summary,
+    build_report,
+    insert_usage,
+    parse_since,
+    seconds_between,
+    usage_from_task_row,
+)
 from .users import User, UserDirectory
 
 logger = logging.getLogger(__name__)
@@ -166,7 +175,10 @@ class ControlService:
             "outcome": record["outcome"],
         }
         with self.database.transaction(immediate=True) as connection:
-            return insert_usage(connection, row)
+            stored = insert_usage(connection, row)
+        if stored:
+            self.publish_usage_summary()
+        return stored
 
     @staticmethod
     def _validate(validator: Draft202012Validator, document: dict[str, Any], kind: str) -> None:
@@ -596,19 +608,29 @@ class ControlService:
             self._notify_pending_approval(self._task_from_row(row), approval_reason)
         return self._task_from_row(row), True
 
-    def get_task(self, task_id: str) -> dict[str, Any]:
+    # Results (a finished task) are readable by any caller. Everything else
+    # of another login's stays private to its submitter and to an operator.
+    _RESULT_STATES = ("completed", "failed")
+
+    @classmethod
+    def _readable_by(cls, row: sqlite3.Row, viewer_login: Optional[str]) -> bool:
+        """``viewer_login`` None is an operator. A user token reads its own tasks and any finished task."""
+        return viewer_login is None or row["submitter_login"] == viewer_login or row["state"] in cls._RESULT_STATES
+
+    def get_task(self, task_id: str, *, viewer_login: Optional[str] = None) -> dict[str, Any]:
         with self.database.read() as connection:
             row = connection.execute("SELECT * FROM tasks WHERE task_id = ?", (task_id,)).fetchone()
-        if row is None:
+        if row is None or not self._readable_by(row, viewer_login):
             raise NotFoundError("TASK_NOT_FOUND", f"unknown task: {task_id}")
         return self._task_from_row(row)
 
-    def get_batch(self, batch_id: str) -> dict[str, Any]:
+    def get_batch(self, batch_id: str, *, viewer_login: Optional[str] = None) -> dict[str, Any]:
         """Return the tasks that share a batch ID, most recent first."""
         with self.database.read() as connection:
             rows = connection.execute(
                 "SELECT * FROM tasks WHERE batch_id = ? ORDER BY created_at DESC", (batch_id,)
             ).fetchall()
+        rows = [row for row in rows if self._readable_by(row, viewer_login)]
         if not rows:
             raise NotFoundError("BATCH_NOT_FOUND", f"unknown batch: {batch_id}")
         return {"batch_id": batch_id, "tasks": [self._task_from_row(row) for row in rows]}
@@ -684,6 +706,53 @@ class ControlService:
                     }
                 )
         return {"generated_at": utc_text(), "runners": runners}
+
+    def usage_report(
+        self, *, by: str, since: str, runner_id: Optional[str] = None, viewer_login: Optional[str] = None
+    ) -> dict[str, Any]:
+        """Usage grouped by agent, batch or platform since a window. ``viewer_login`` None is an operator."""
+        if by not in REPORT_GROUPS:
+            raise ControlError("USAGE_GROUP_INVALID", f"by must be one of: {', '.join(REPORT_GROUPS)}")
+        since_text = parse_since(since, utc_now())
+        sql = "SELECT * FROM task_usage WHERE ended_at >= ?"
+        params: list[Any] = [since_text]
+        if runner_id:
+            sql += " AND runner_id = ?"
+            params.append(runner_id)
+        with self.database.read() as connection:
+            rows = [dict(row) for row in connection.execute(sql, params)]
+        return {
+            "by": by,
+            "since": since_text,
+            "total_runner_seconds": round(sum(row["runner_seconds"] for row in rows), 1),
+            "rows": build_report(rows, by=by, viewer_login=viewer_login),
+        }
+
+    def usage_summary(self) -> dict[str, Any]:
+        """The public usage summary: runner time per platform and day, from the allowlist projection."""
+        now = utc_now()
+        since = utc_text(now - timedelta(days=SUMMARY_WINDOW_DAYS))
+        with self.database.read() as connection:
+            rows = [dict(r) for r in connection.execute("SELECT * FROM task_usage WHERE ended_at >= ?", (since,))]
+            queued = connection.execute(
+                "SELECT runner_id, COUNT(*) AS n FROM tasks WHERE state='queued' GROUP BY runner_id"
+            )
+            depth: dict[str, int] = {}
+            for row in queued.fetchall():
+                platform = self._platform_of(row["runner_id"]) or "unknown"
+                depth[platform] = depth.get(platform, 0) + row["n"]
+        return public_usage_summary(build_public_summary(rows, depth, now=now))
+
+    def publish_usage_summary(self) -> None:
+        """Write usage/summary.json under the published canary directory. Best effort: failures are logged only."""
+        if self.published_canary_dir is None:
+            return
+        try:
+            self._write_static(
+                self._public_dir(self.published_canary_dir / "usage") / "summary.json", self.usage_summary()
+            )
+        except Exception:  # pylint: disable=broad-except
+            logger.warning("unable to publish usage summary", exc_info=True)
 
     def _record_cancelled_usage(self, connection: sqlite3.Connection, row: sqlite3.Row, ended_at: str) -> None:
         """A task cancelled before any runner accepted it used no runner time."""
@@ -780,6 +849,8 @@ class ControlService:
             ).fetchall()
         for audit in audits:
             self.database.append_audit_jsonl(audit)
+        if changed:
+            self.publish_usage_summary()
         if not is_operator:
             updated_rows = [row for row in updated_rows if row["submitter_login"] == identity_login]
         return [self._task_from_row(row) for row in updated_rows], changed, skipped
@@ -1051,6 +1122,7 @@ class ControlService:
         # for the dashboard and agents. Both are best effort and never fail the
         # outcome path.
         self._publish_outcome(self._task_from_row(updated))
+        self.publish_usage_summary()
         return self._task_from_row(updated), True
 
     def _publish_outcome(self, task: dict[str, Any]) -> None:

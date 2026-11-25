@@ -1168,6 +1168,12 @@ def build_parser() -> argparse.ArgumentParser:
     reject_parser.add_argument("selector", help="Task id or batch id to reject")
     reject_parser.add_argument("--json", action="store_true")
 
+    usage_parser = subparsers.add_parser("usage", help="Show runner time used, by agent, batch or platform")
+    usage_parser.add_argument("--by", choices=["agent", "batch", "platform"], default="agent")
+    usage_parser.add_argument("--since", default="7d", help="A duration such as 24h or 7d, or a date YYYY-MM-DD (UTC)")
+    usage_parser.add_argument("--runner", default=None, help="Only this runner id")
+    usage_parser.add_argument("--json", action="store_true")
+
     # plot subcommand
     plot_parser = subparsers.add_parser("plot", help="Render a figure from a task's results")
     plot_sub = plot_parser.add_subparsers(dest="plot_command", title="figures")
@@ -2291,6 +2297,25 @@ def handle_queue_mine(args: argparse.Namespace) -> int:
     return 0
 
 
+def handle_usage(args: argparse.Namespace) -> int:
+    """Handle 'usage': runner time by agent, batch or platform. An operator sees every group, others see their own."""
+    document = _remote_client().usage(by=args.by, since=args.since, runner_id=args.runner)
+    if args.json:
+        _emit_json("usage", document)
+        return 0
+    print(f"Runner time by {args.by} since {document['since']} (total {document['total_runner_seconds']:.0f} s)")
+    print(
+        f"{args.by.upper():<28} {'TASKS':>6} {'RUNNER S':>10} {'SHARE':>7} {'MEAN WAIT S':>12} {'FAILED':>7} {'CANCELLED':>10}"
+    )
+    for row in document.get("rows", []):
+        wait = "-" if row["mean_wait_seconds"] is None else f"{row['mean_wait_seconds']:.0f}"
+        print(
+            f"{row['key']:<28} {row['task_count']:>6} {row['runner_seconds']:>10.0f} {row['share'] * 100:>6.1f}% "
+            f"{wait:>12} {row['failed_count']:>7} {row['cancelled_count']:>10}"
+        )
+    return 0
+
+
 def handle_queue_pending(args: argparse.Namespace) -> int:
     """Handle 'queue pending': list tasks awaiting approval."""
     document = _remote_client().list_pending()
@@ -2432,6 +2457,8 @@ def _dispatch(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
             return handle_queue_approve(args)
         if args.queue_command == "reject":
             return handle_queue_reject(args)
+    if args.command == "usage":
+        return handle_usage(args)
     if args.command == "plot":
         return handle_plot(args, parser)
     parser.print_usage()

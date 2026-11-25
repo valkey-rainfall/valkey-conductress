@@ -214,8 +214,7 @@ async def test_read_scope_can_read_but_not_submit_or_cancel(scoped_client):
     assert refused.status == 403
     assert (await refused.json())["code"] == "SCOPE_READ_ONLY"
 
-    shown = await scoped_client.get("/api/v1/tasks/task-1", headers=_bearer(READ_TOKEN))
-    assert shown.status == 200
+    # A queued task of another login is not readable (see test_usage_report.py); the list of its own is.
     mine = await scoped_client.get("/api/v1/tasks/mine", headers=_bearer(READ_TOKEN))
     assert mine.status == 200
 
