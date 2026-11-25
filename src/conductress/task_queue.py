@@ -11,7 +11,7 @@ from dataclasses import fields as dataclasses_fields
 from datetime import datetime
 from importlib import import_module
 from pathlib import Path
-from typing import ClassVar, Dict, Optional, Type
+from typing import Callable, ClassVar, Dict, Optional, Type
 
 from . import config
 from .file_protocol import FileProtocol
@@ -215,16 +215,29 @@ class BaseTaskData(ABC):
         return cls.from_dict(data, envelope_task_id=persisted_override)
 
 
+class TaskCancelled(Exception):
+    """A task stopped because the control service asked it to (an operator cancelled it)."""
+
+
 class BaseTaskRunner(ABC):
     """Base class for task runners"""
 
     def __init__(self, task_name: str):
         self.task_name = task_name
+        # Set by TaskRunner for a remote task: returns True when the control service
+        # wants the task stopped. None for a local task, which cannot be cancelled remotely.
+        self.cancel_check: Optional[Callable[[], bool]] = None
         self.file_protocol = FileProtocol(task_name, role_id="client")
         # Cores the runner process is pinned to for this task ("" if unpinned);
         # set by TaskRunner before run(). A task that checks for foreign CPU
         # activity treats them as claimed.
         self.management_cpus: str = ""
+
+    def check_cancel(self) -> None:
+        """Stop here if the task was cancelled. Call it between repetitions, never inside a measurement."""
+        check = self.cancel_check  # TaskRunner assigns a function; pylint only sees the None default
+        if check is not None and check():  # pylint: disable=not-callable
+            raise TaskCancelled("cancelled by the operator")
 
     @abstractmethod
     async def run(self) -> None:

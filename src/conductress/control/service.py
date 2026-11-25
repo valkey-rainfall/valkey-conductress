@@ -617,6 +617,16 @@ class ControlService:
         """``viewer_login`` None is an operator. A user token reads its own tasks and any finished task."""
         return viewer_login is None or row["submitter_login"] == viewer_login or row["state"] in cls._RESULT_STATES
 
+    def runner_task_state(self, task_id: str, runner_id: str) -> dict[str, Any]:
+        """The state of a task assigned to ``runner_id`` and nothing else. Another runner's task is not found."""
+        with self.database.read() as connection:
+            row = connection.execute(
+                "SELECT task_id, runner_id, state FROM tasks WHERE task_id = ?", (task_id,)
+            ).fetchone()
+        if row is None or row["runner_id"] != runner_id:
+            raise NotFoundError("TASK_NOT_FOUND", f"unknown task: {task_id}")
+        return {"task_id": row["task_id"], "runner_id": row["runner_id"], "state": row["state"]}
+
     def get_task(self, task_id: str, *, viewer_login: Optional[str] = None) -> dict[str, Any]:
         with self.database.read() as connection:
             row = connection.execute("SELECT * FROM tasks WHERE task_id = ?", (task_id,)).fetchone()
@@ -763,9 +773,11 @@ class ControlService:
             ),
         )
 
-    # States a caller may still cancel outright (nothing has been handed to a
-    # runner yet). Others require the softer cancel-requested path.
-    _UNCLAIMED_CANCELLABLE = ("queued", "pending-approval")
+    # States where no runner has started the task, so it is cancelled outright. A claimed task
+    # is not accepted yet: the runner's accept then fails with TASK_NOT_CLAIMED and it drops the
+    # task. As cancel-requested it would never reach a final state, because nobody reports it.
+    # An accepted task is running and becomes cancel-requested; the runner stops it.
+    _NOT_STARTED = ("queued", "pending-approval", "claimed")
     _IN_FLIGHT_STATES = ("claimed", "accepted", "cancel-requested")
 
     @classmethod
@@ -817,9 +829,9 @@ class ControlService:
                     skipped["already_running"].append(row["task_id"])
                     continue
                 state = row["state"]
-                if state in self._UNCLAIMED_CANCELLABLE:
+                if state in self._NOT_STARTED:
                     new_state = "cancelled"
-                elif state in {"claimed", "accepted"}:
+                elif state == "accepted":
                     new_state = "cancel-requested"
                 else:
                     # cancelled, cancel-requested, completed, failed: nothing to do.

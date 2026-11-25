@@ -648,6 +648,7 @@ class CachecannonTaskRunner(BaseTaskRunner):
         try:
             effective_reps = self.max_reps if self.max_reps > 0 else self.repetitions
             for rep in range(effective_reps):
+                self.check_cancel()
                 # Between-rep housekeeping
                 if rep > 0:
                     await topology_group.stop_all_servers()

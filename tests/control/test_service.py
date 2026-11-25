@@ -110,13 +110,22 @@ def test_cancel_unclaimed_and_claimed(control_env):
     assert tasks[0]["state"] == "cancelled"
     assert replay[0]["state"] == "cancelled"
 
-    # A claimed task is not cancelled outright: it is marked cancel-requested so
-    # the runner stops at its next boundary.
+    # A claimed task is not accepted yet, so nothing runs: it is cancelled outright and the
+    # runner's accept is refused. An accepted (running) task is marked cancel-requested so the
+    # runner stops at its next repetition.
     service.submit_task(task_envelope("task-2"), actor="operator:test")
-    service.claim_task("armbench", actor="runner:armbench")
+    claim = service.claim_task("armbench", actor="runner:armbench")
     tasks2, changed2, _ = service.cancel_task("task-2", actor="operator:test")
-    assert changed2 == 1
-    assert tasks2[0]["state"] == "cancel-requested"
+    assert (changed2, tasks2[0]["state"]) == (1, "cancelled")
+    with pytest.raises(Exception) as refused:
+        service.accept_task("armbench", "task-2", claim["claim_token"], actor="runner:armbench")
+    assert refused.value.code == "TASK_NOT_CLAIMED"
+
+    service.submit_task(task_envelope("task-3"), actor="operator:test")
+    claim = service.claim_task("armbench", actor="runner:armbench")
+    service.accept_task("armbench", "task-3", claim["claim_token"], actor="runner:armbench")
+    tasks3, changed3, _ = service.cancel_task("task-3", actor="operator:test")
+    assert (changed3, tasks3[0]["state"]) == (1, "cancel-requested")
 
 
 def test_cancel_unknown_selector_raises(control_env):

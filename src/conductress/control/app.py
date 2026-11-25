@@ -307,6 +307,11 @@ def _viewer_login(identity: AuthIdentity) -> Optional[str]:
 
 
 async def _get_task(request: web.Request) -> web.Response:
+    identity: AuthIdentity = request["auth"]
+    if identity.role == "runner":
+        # A runner reads the state of its own tasks to learn that one was cancelled. Nothing else.
+        state = request.app[SERVICE_KEY].runner_task_state(request.match_info["task_id"], _runner_id(identity))
+        return _response(task=state)
     identity = _require_submitter(request)
     task = request.app[SERVICE_KEY].get_task(request.match_info["task_id"], viewer_login=_viewer_login(identity))
     return _response(task=task)
