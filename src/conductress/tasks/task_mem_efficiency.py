@@ -317,6 +317,8 @@ class MemTaskData(BaseTaskData):
     user_data_bytes: int = 0  # per-item user data for overhead calculation
     populate_mode: str = "random"  # zadd insertion pattern: random | sequential | churn
     settle: bool = False  # opt-in: quiesce until used_memory plateaus before sampling
+    # Items to fill. Only a manual task may change it; a sweep task (sweep_commit set) keeps the default.
+    item_count: int = MEM_TEST_ITEM_COUNT
 
     def short_description(self) -> str:
         description = self.type
@@ -330,6 +332,8 @@ class MemTaskData(BaseTaskData):
 
     def prepare_task_runner(self, server_infos: list[ServerInfo]) -> "MemTaskRunner":
         """Return the task runner for this task."""
+        if self.sweep_commit and self.item_count != MEM_TEST_ITEM_COUNT:
+            raise ValueError(f"a sweep task keeps the default item count {MEM_TEST_ITEM_COUNT}, got {self.item_count}")
         return MemTaskRunner(
             self.task_id,
             server_infos[0].ip,
@@ -346,6 +350,7 @@ class MemTaskData(BaseTaskData):
             self.user_data_bytes,
             self.populate_mode,
             self.settle,
+            self.item_count,
         )
 
 
@@ -371,6 +376,7 @@ class MemTaskRunner(BaseTaskRunner):
         user_data_bytes: int = 0,
         populate_mode: str = "random",
         settle: bool = False,
+        item_count: Optional[int] = None,
     ):
         super().__init__(task_name)
 
@@ -396,6 +402,7 @@ class MemTaskRunner(BaseTaskRunner):
         self.user_data_bytes = user_data_bytes
         self.populate_mode = populate_mode
         self.settle = settle
+        self.item_count = item_count if item_count is not None else MEM_TEST_ITEM_COUNT
 
         # test data
         self.commit_hash: Optional[str] = None
@@ -529,7 +536,7 @@ class MemTaskRunner(BaseTaskRunner):
             identity = await collect_identity(valkey, self.cached_binary_path)
             profiling_state = await collect_profiling_state(valkey)
 
-            count = MEM_TEST_ITEM_COUNT
+            count = self.item_count
             from conductress.sweep.memory_coordinator import MemoryWorkload  # noqa: E402 (circular import)
 
             workload = MemoryWorkload(
@@ -725,6 +732,8 @@ class MemTaskRunner(BaseTaskRunner):
 
             result = {
                 "memory_record": memory_record,
+                "item_count": item_count,  # reached; the queried cardinality
+                "item_count_requested": count,
                 "before_memory": before_memory,
                 "after_memory": after_memory,
                 "has_expire": self.has_expire,

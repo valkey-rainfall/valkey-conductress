@@ -516,6 +516,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     mem_parser.add_argument("--expire", action="store_true", help="Also test with expiration enabled")
     mem_parser.add_argument(
+        "--item-count",
+        default="",
+        help="Number of items to fill, 10000 to 50000000 (default: the standard 5,000,000). Overhead per item "
+        "depends on the hash table size, so compare engines at the same count. The sweep always uses the default.",
+    )
+    mem_parser.add_argument(
         "--populate-mode",
         choices=["random", "sequential", "churn"],
         default="random",
@@ -2021,15 +2027,32 @@ def _memory_workload_label(workload: "MemoryWorkload") -> str:
     return f"{label}-expire" if workload.has_expire else label
 
 
-def _validate_memory_workload_sizes(workload: "MemoryWorkload") -> None:
-    """Reject sizes the populator cannot encode uniquely for MEM_TEST_ITEM_COUNT items.
+MEM_ITEM_COUNT_MIN = 10_000
+MEM_ITEM_COUNT_MAX = 50_000_000
+
+
+def _parse_item_count(raw: str) -> int:
+    """The --item-count value: an integer (underscores and commas allowed) in the supported range."""
+    try:
+        count = int(raw.replace(",", "").replace("_", ""))
+    except ValueError:
+        raise ValueError(f"--item-count must be an integer, got {raw!r}") from None
+    if not MEM_ITEM_COUNT_MIN <= count <= MEM_ITEM_COUNT_MAX:
+        raise ValueError(
+            f"--item-count must be between {MEM_ITEM_COUNT_MIN:,} and {MEM_ITEM_COUNT_MAX:,}, got {count:,}"
+        )
+    return count
+
+
+def _validate_memory_workload_sizes(workload: "MemoryWorkload", count: Optional[int] = None) -> None:
+    """Reject sizes the populator cannot encode uniquely for ``count`` items (default MEM_TEST_ITEM_COUNT).
 
     Keys, members and fields carry a prefix plus a zero-padded index, so each has a
     floor below which two items would collide. Values are pure padding and have no floor.
     """
     from conductress.sweep.populator import minimum_item_size
 
-    count = config.MEM_TEST_ITEM_COUNT
+    count = count if count is not None else config.MEM_TEST_ITEM_COUNT
     checks: list[tuple[str, str, int]] = []
     if workload.command == "set":
         checks.append(("key", "key", workload.key_size))
@@ -2126,9 +2149,15 @@ def handle_queue_add_memory(args: argparse.Namespace) -> int:
             for wl in workloads
         ]
 
+    try:
+        item_count = _parse_item_count(args.item_count) if args.item_count else config.MEM_TEST_ITEM_COUNT
+    except ValueError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
     for wl in workloads:
         try:
-            _validate_memory_workload_sizes(wl)
+            _validate_memory_workload_sizes(wl, item_count)
         except ValueError as e:
             print(f"Error: {e}", file=sys.stderr)
             return 1
@@ -2153,6 +2182,7 @@ def handle_queue_add_memory(args: argparse.Namespace) -> int:
             user_data_bytes=wl.user_data_bytes,
             populate_mode=args.populate_mode,
             settle=args.settle,
+            item_count=item_count,
         )
         queue.submit_task(task)
 
@@ -2161,6 +2191,8 @@ def handle_queue_add_memory(args: argparse.Namespace) -> int:
         return 0
     print(f"Queued {len(workloads)} memory task(s):")
     print(f"  source={args.source} specifier={args.specifier}")
+    if item_count != config.MEM_TEST_ITEM_COUNT:
+        print(f"  item count: {item_count:,}")
     for wl in workloads:
         expire_str = " +expire" if wl.has_expire else ""
         print(f"  - {wl.command} v={wl.value_size}B k={wl.key_size}B{expire_str}")

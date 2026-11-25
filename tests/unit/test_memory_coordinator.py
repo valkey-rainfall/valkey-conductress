@@ -102,6 +102,7 @@ def _mem_task(**overrides):
         field_size=0,
         settle=True,
         enable_profiling=False,
+        item_count=5_000_000,
     )
     fields.update(overrides)
     task = MagicMock(spec=MemTaskData)

@@ -187,6 +187,8 @@ class MemorySweepCoordinator(BaseSweepCoordinator):
             and task.key_size == self._workload.key_size
             and task.field_size == self._workload.field_size
             and bool(task.settle)
+            # A manual task with another item count measures another point, not this series.
+            and task.item_count == self._workload.item_count
         )
 
     def _extract_result(self, task: BaseTaskData) -> Optional[tuple[float, float, int]]:
