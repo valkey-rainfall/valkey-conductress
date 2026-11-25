@@ -193,6 +193,7 @@ def create_app(
         results_jsonl_path=config.results_jsonl_path,
     )
     service.fill_usage_platforms()
+    service.publish_usage_summary()
     service.expire_stale_claims(actor="system:startup")
     service.publish_canary_status()
     scheduler = CanaryScheduler(database, registry, canary_profiles)
@@ -221,6 +222,7 @@ def create_app(
     app.router.add_get("/api/v1/batches/{batch_id}", _get_batch)
     app.router.add_get("/api/v1/canary/status", _canary_status)
     app.router.add_get("/api/v1/canary/status/{runner_id}", _canary_status_runner)
+    app.router.add_get("/api/v1/usage", _usage_report)
     app.router.add_get("/api/v1/fleet", _fleet)
     app.router.add_get("/api/v1/fleet/{runner_id}", _fleet_runner)
     app.router.add_put("/api/v1/runners/{runner_id}/status", _push_status)
@@ -299,14 +301,22 @@ async def _list_tasks(request: web.Request) -> web.Response:
     return _response(tasks=tasks)
 
 
+def _viewer_login(identity: AuthIdentity) -> Optional[str]:
+    """The login whose view of the data applies. None means an operator, who sees everything."""
+    return None if identity.role == "operator" else identity.login
+
+
 async def _get_task(request: web.Request) -> web.Response:
-    _require_submitter(request)
-    return _response(task=request.app[SERVICE_KEY].get_task(request.match_info["task_id"]))
+    identity = _require_submitter(request)
+    task = request.app[SERVICE_KEY].get_task(request.match_info["task_id"], viewer_login=_viewer_login(identity))
+    return _response(task=task)
 
 
 async def _get_batch(request: web.Request) -> web.Response:
-    _require_submitter(request)
-    return _response(batch=request.app[SERVICE_KEY].get_batch(request.match_info["batch_id"]))
+    identity = _require_submitter(request)
+    return _response(
+        batch=request.app[SERVICE_KEY].get_batch(request.match_info["batch_id"], viewer_login=_viewer_login(identity))
+    )
 
 
 async def _list_mine(request: web.Request) -> web.Response:
@@ -346,6 +356,19 @@ async def _cancel_task(request: web.Request) -> web.Response:
         is_operator=identity.role == "operator",
     )
     return _response(tasks=tasks, changed=changed, skipped=skipped)
+
+
+async def _usage_report(request: web.Request) -> web.Response:
+    identity = _require_submitter(request)
+    if identity.role != "operator" and identity.login is None:
+        raise AuthorizationError("LOGIN_REQUIRED", "a user token is required to read usage")
+    report = request.app[SERVICE_KEY].usage_report(
+        by=request.query.get("by", "agent"),
+        since=request.query.get("since", "7d"),
+        runner_id=request.query.get("runner_id"),
+        viewer_login=_viewer_login(identity),
+    )
+    return _response(**report)
 
 
 async def _fleet(request: web.Request) -> web.Response:

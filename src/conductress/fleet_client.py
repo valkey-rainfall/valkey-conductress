@@ -270,6 +270,9 @@ class FleetClient:
     def list_mine(self, *, limit: int = 100) -> dict[str, Any]:
         return self._request("GET", "tasks/mine", query={"limit": limit}) or {}
 
+    def usage(self, *, by: str, since: str, runner_id: Optional[str] = None) -> dict[str, Any]:
+        return self._request("GET", "usage", query={"by": by, "since": since, "runner_id": runner_id}) or {}
+
     def list_pending(self) -> dict[str, Any]:
         return self._request("GET", "tasks/pending") or {}
 

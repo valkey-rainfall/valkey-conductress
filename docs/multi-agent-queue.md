@@ -1,6 +1,6 @@
 # Multi-agent queue: identity, accounting, fair share, and sweep share
 
-Status: design note. Rollout steps 1 (server-set identity and token scope), 2 (own-only cancel rules) and 3 (usage accounting) are implemented; the other steps are not. It describes the changes in the order they will be built, names the files they touch, and says how each one is tested.
+Status: design note. Rollout steps 1 (server-set identity and token scope), 2 (own-only cancel rules), 3 (usage accounting) and 4 (usage report and summary export) are implemented; the other steps are not. It describes the changes in the order they will be built, names the files they touch, and says how each one is tested.
 
 ## 1. Purpose
 

@@ -102,6 +102,7 @@ Runner routes:
 PUT  /api/v1/runners/{runner_id}/status
 POST /api/v1/runners/{runner_id}/claim
 POST /api/v1/runners/{runner_id}/usage
+GET  /api/v1/usage
 POST /api/v1/tasks/{task_id}/accept
 POST /api/v1/tasks/{task_id}/complete
 POST /api/v1/tasks/{task_id}/fail
@@ -378,7 +379,11 @@ Schema version 5 adds one table, `task_usage`: one row per task with the runner 
 
 A runner posts one record to `POST /api/v1/runners/{runner_id}/usage` (runner token of that runner) for each task it ran from its own queue, which the service never sees: class `sweep` (queued by the sweep scheduler) or `local` (queued by hand). The record has the task ID, class, start and end time, and outcome. The service computes the seconds and stores `sweep` or `local` as the submitter. The runner keeps records it could not deliver in `fleet_usage_outbox.json` (at most 500) and tries again at the next boundary, so an outage never blocks a task. Only a runner in `live` fleet mode posts.
 
-This version has no report, no CLI command and no published file for usage. The table is not read by any route yet.
+Report. `GET /api/v1/usage?by=agent|batch|platform&since=<window>&runner_id=` and `conductress usage --by agent|batch|platform --since 7d [--runner ID] [--json]`. `since` is a duration (`24h`, `7d`) or a UTC date; the default is `7d`. Each row has the task count, runner seconds, share of the total, mean wait (start minus queue time, for tasks that ran), failed count, and cancelled count. An operator token sees every group, including sweep, canary and local time. A user token (`submit` or `read`) sees its own rows grouped as asked and all other time in one row named `others`, so it never sees another login, batch ID, note, or the sweep and canary split. A runner token gets 403.
+
+Public summary. After each task end, cancel, and runner usage post, the service writes `usage/summary.json` under the published canary directory (`PUBLISHED_CANARY_DIR`, next to `canary/`). The file is served without a token, so it holds only aggregates chosen by an allowlist in `public_fields.py`: per platform label, the current queue depth and, for each UTC day of the last 30, runner seconds and task counts by class (`manual`, `canary`, `sweep`, `local`) and the median queue wait. It has no login, runner ID, batch ID, note or other free text. Tasks cancelled before they ran are not counted. A field that is not in the allowlist is dropped, and a test fails when a new field appears. Per-agent and per-batch data is never written to a file.
+
+Reading a task. `GET /api/v1/tasks/{id}` and `GET /api/v1/batches/{id}` with a user token return the caller's own tasks and any finished task (`completed` or `failed`, which is a result). Another login's queued, running, pending or cancelled task answers 404 as if it did not exist. An operator token reads everything.
 
 The migration only adds the table and one `schema_migrations` row, in one transaction. It copies values out of `tasks` to fill the table (platform is filled at the next service start from the fleet manifest) and does not change any existing row. It is safe to run again. To check a database before deploying, run the migration on a temporary copy:
 

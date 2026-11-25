@@ -68,6 +68,7 @@ def main() -> None:
     )
     subparsers.add_parser("queue", help="Manage the task queue (list, add, remove)", add_help=False)
     subparsers.add_parser("plot", help="Render a figure from a task's results", add_help=False)
+    subparsers.add_parser("usage", help="Show runner time used, by agent, batch or platform", add_help=False)
     subparsers.add_parser("fleet", help="Discover and inspect benchmark runners", add_help=False)
     subparsers.add_parser("remote", help="Inspect and cancel remote tasks", add_help=False)
     subparsers.add_parser("canary", help="Canary drift monitoring", add_help=False)
@@ -383,6 +384,11 @@ def main() -> None:
         from conductress.cli import main as cli_main
 
         sys.exit(cli_main(["queue"] + remaining))
+
+    elif args.command == "usage":
+        from conductress.cli import main as cli_main
+
+        sys.exit(cli_main(["usage"] + remaining))
 
     elif args.command == "plot":
         from conductress.cli import main as cli_main
