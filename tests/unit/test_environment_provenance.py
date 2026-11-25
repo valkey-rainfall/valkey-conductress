@@ -6,6 +6,7 @@ annotation in the coordinators, and the exporter's period markers.
 """
 
 import json
+import os
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
@@ -256,36 +257,53 @@ class TestRemoteEnvironment:
             ri.REMOTE_ENVIRONMENT_COMMAND
         )
 
-    @pytest.mark.skipif(not Path("/proc/stat").exists(), reason="needs Linux /proc")
-    def test_host_command_measures_a_real_foreign_process(self):
-        """The shell sample attributes a spinning process to foreign CPU (and not to valkey-server).
+    @staticmethod
+    def _run_host_command(command: str) -> dict:
+        out = subprocess.run(["/bin/sh", "-c", command], capture_output=True, text=True, timeout=30, check=False)
+        env = ri.parse_remote_environment(out.stdout)
+        env["same_host"] = False
+        assert isinstance(env["foreign_cpu_cores"], float), out.stdout
+        return env
 
-        Run the real host command twice: with a process burning one core (the
-        sample must rise by about a core and the warning must fire), and after
-        it is gone (the sample must fall back by about as much). The delta, not
-        an absolute, is asserted, because the test host may itself be busy.
+    def _sample_with_busy_jiffies(self, tmp_path, busy_jiffies: int) -> dict:
+        """Run the real host command on CPU counters that we control.
+
+        The command reads the CPU counters of the whole host twice, FOREIGN_CPU_SAMPLE_SECONDS apart.
+        Spinning a real process and comparing two samples depends on what else the host runs: a shared
+        test host showed 11 to 13 foreign cores while idle, so two samples differed by more than the
+        spinner. Here the first read gets one file and the sleep is replaced by a copy that turns it
+        into the second file, so the result is exact. The shell, awk and getconf are the real ones.
         """
-        import sys  # pylint: disable=import-outside-toplevel
+        stat = tmp_path / "stat"
+        after = tmp_path / "stat.after"
+        stat.write_text("cpu  1000 0 0 1000000 0 0 0 0 0 0\n", encoding="utf-8")
+        after.write_text(f"cpu  {1000 + busy_jiffies} 0 0 1000000 0 0 0 0 0 0\n", encoding="utf-8")
+        sleep_step = f"sleep {ri.FOREIGN_CPU_SAMPLE_SECONDS};"
+        command = ri.REMOTE_ENVIRONMENT_COMMAND.replace("/proc/stat", str(stat)).replace(
+            sleep_step, f"cp '{after}' '{stat}';"
+        )
+        assert str(stat) in command and "cp '" in command, "the host command no longer has the expected steps"
+        return self._run_host_command(command)
 
-        def sample() -> dict:
-            out = subprocess.run(
-                ["/bin/sh", "-c", ri.REMOTE_ENVIRONMENT_COMMAND], capture_output=True, text=True, timeout=30
-            )
-            env = ri.parse_remote_environment(out.stdout)
-            env["same_host"] = False
-            assert isinstance(env["foreign_cpu_cores"], float), out.stdout
-            return env
+    @pytest.mark.skipif(not Path("/proc/stat").exists(), reason="needs Linux /proc")
+    def test_host_command_turns_cpu_counters_into_foreign_cores(self, tmp_path):
+        """One core busy for the whole sample reads as 1 core and warns; no change reads as 0 and does not."""
+        hz = os.sysconf("SC_CLK_TCK")
+        one_core = hz * ri.FOREIGN_CPU_SAMPLE_SECONDS
+        busy = self._sample_with_busy_jiffies(tmp_path, one_core)
+        quiet = self._sample_with_busy_jiffies(tmp_path, 0)
+        # A valkey-server on the test host is subtracted by the command, so allow a small difference.
+        assert busy["foreign_cpu_cores"] == pytest.approx(1.0, abs=0.05)
+        assert quiet["foreign_cpu_cores"] == pytest.approx(0.0, abs=0.05)
+        assert "cores over 2 s" in (ri.server_host_busy_warning(busy) or "")
+        assert ri.server_host_busy_warning(quiet) is None
+        assert quiet["load_1m"] is not None
 
-        spinner = subprocess.Popen([sys.executable, "-c", "while True:\n pass"])
-        try:
-            busy = sample()
-        finally:
-            spinner.kill()
-            spinner.wait(timeout=10)
-        quiet = sample()
-        assert busy["foreign_cpu_cores"] - quiet["foreign_cpu_cores"] > 0.5, (busy, quiet)
-        assert ri.server_host_busy_warning(busy) is not None and "cores over 2 s" in ri.server_host_busy_warning(busy)
-        assert quiet["valkey_server_procs"] == 0 and quiet["load_1m"] is not None
+    @pytest.mark.skipif(not Path("/proc/stat").exists(), reason="needs Linux /proc")
+    def test_host_command_runs_unchanged_on_this_host(self):
+        """The real command on the real /proc prints a number of cores. The value depends on the host, so only the shape is checked."""
+        env = self._run_host_command(ri.REMOTE_ENVIRONMENT_COMMAND)
+        assert isinstance(env["valkey_server_procs"], int) and env["load_1m"] is not None
 
     def test_remote_packages_line_is_parsed_and_missing_rpm_is_none(self):
         env = ri.parse_remote_environment(self.OUTPUT)
