@@ -356,3 +356,59 @@ def test_conductress_revision_unknown_is_none(monkeypatch):
     assert mr.conductress_revision() is None
     monkeypatch.setattr(ri, "get_runner_info", MagicMock(side_effect=RuntimeError("no runner config")))
     assert mr.conductress_revision() is None
+
+
+class ShellServer:
+    """Runs host commands in a real bash with HOME set to a test folder, as the remote login shell would."""
+
+    def __init__(self, home):
+        self.home = str(home)
+        self.valkey_pid = -1
+
+    async def run_host_command(self, command, check=True, pin_cpus=""):
+        import subprocess
+
+        r = subprocess.run(
+            ["bash", "-c", command],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            env={"HOME": self.home, "PATH": "/usr/bin:/bin"},
+        )
+        return r.stdout, r.stderr
+
+    async def info(self, section):
+        return {"server_name": "valkey", "valkey_version": "9.1.0"}
+
+
+class TestRemotePathQuoting:
+    @pytest.mark.parametrize(
+        "path, word",
+        [
+            ("~/build_cache/valkey/abc/def/valkey-server", "~/build_cache/valkey/abc/def/valkey-server"),
+            ("~/dir with space/valkey-server", "~/'dir with space/valkey-server'"),
+            ("~", "~"),
+            ("/opt/x/valkey-server", "/opt/x/valkey-server"),
+            ("/opt/a b/valkey-server", "'/opt/a b/valkey-server'"),
+            ("~/x;echo injected", "~/'x;echo injected'"),
+        ],
+    )
+    def test_shell_path(self, path, word):
+        assert mr.shell_path(Path(path)) == word
+
+    def test_tilde_path_is_expanded_by_the_shell(self, tmp_path):
+        """The cached binary sits under ~/build_cache: its sha256 and --version must be read through that path."""
+        import hashlib
+
+        cache = tmp_path / "build_cache" / "valkey" / "abc" / "def"
+        cache.mkdir(parents=True)
+        binary = cache / "valkey-server"
+        binary.write_text('#!/bin/sh\necho "Example server v=9.1.0 lib=$LD_LIBRARY_PATH"\n')
+        binary.chmod(0o755)
+        ident = run(mr.collect_identity(ShellServer(tmp_path), Path("~/build_cache/valkey/abc/def/valkey-server")))
+        assert ident["binary_sha256"] == hashlib.sha256(binary.read_bytes()).hexdigest()
+        assert ident["version_text"] == "Example server v=9.1.0 lib=%s" % cache
+
+    def test_missing_binary_still_gives_none(self, tmp_path):
+        ident = run(mr.collect_identity(ShellServer(tmp_path), Path("~/build_cache/none/valkey-server")))
+        assert ident["binary_sha256"] is None and ident["version_text"] is None

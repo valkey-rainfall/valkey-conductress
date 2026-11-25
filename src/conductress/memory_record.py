@@ -258,19 +258,32 @@ async def take_sample(server: Any) -> dict[str, Optional[int]]:
     return sample_values(info, proc)
 
 
+def shell_path(path: Path) -> str:
+    """A remote path as a shell word. A leading "~/" stays unquoted so the remote shell expands it.
+
+    The binary cache lives under "~/build_cache/...". shlex.quote alone wraps the whole path in single quotes, the
+    shell then does not expand "~", and the command fails (every binary sha256 and --version came back null).
+    """
+    text = str(path)
+    if text == "~":
+        return "~"
+    if text.startswith("~/"):
+        return "~/" + shlex.quote(text[2:])
+    return shlex.quote(text)
+
+
 async def collect_identity(server: Any, binary_path: Path) -> dict[str, Any]:
     """Engine identity from INFO server, the binary's sha256 and its --version text."""
     info = await _optional("info server", lambda: server.info("server"))
 
     async def _sha() -> Optional[str]:
-        out, _ = await server.run_host_command(f"sha256sum {shlex.quote(str(binary_path))}", check=False)
+        out, _ = await server.run_host_command(f"sha256sum {shell_path(binary_path)}", check=False)
         token = (out if isinstance(out, str) else "").split()
         return token[0] if token and re.fullmatch(r"[0-9a-f]{64}", token[0]) else None
 
     async def _version() -> Optional[str]:
-        quoted = shlex.quote(str(binary_path))
         out, _ = await server.run_host_command(
-            f"LD_LIBRARY_PATH={shlex.quote(str(binary_path.parent))} {quoted} --version", check=False
+            f"LD_LIBRARY_PATH={shell_path(binary_path.parent)} {shell_path(binary_path)} --version", check=False
         )
         return parse_version_text(out)
 
