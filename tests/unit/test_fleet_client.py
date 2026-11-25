@@ -94,6 +94,21 @@ def test_submit_sends_json_and_idempotency_key():
     assert json.loads(request.data) == {"task_id": "t1"}
 
 
+def test_post_usage_sends_the_record_to_the_runner_route_with_an_idempotency_key():
+    observed = {}
+
+    def opener(request, **_kwargs):
+        observed["request"] = request
+        return FakeResponse({"schema_version": 1, "stored": True})
+
+    client = FleetClient(FleetClientConfig("https://example.test/api/v1", "secret"), opener=opener)
+    client.post_usage("armbench", {"task_id": "t1"})
+    request = observed["request"]
+    assert (request.method, request.full_url) == ("POST", "https://example.test/api/v1/runners/armbench/usage")
+    assert request.get_header("Idempotency-key") == "usage:t1"
+    assert json.loads(request.data) == {"task_id": "t1"}
+
+
 def test_api_errors_map_to_stable_exit_codes():
     body = json.dumps({"schema_version": 1, "error": "ambiguous", "code": "PLATFORM_AMBIGUOUS"}).encode()
 

@@ -2,6 +2,7 @@
 
 import argparse
 import getpass
+import sqlite3
 import subprocess
 import sys
 from pathlib import Path
@@ -99,6 +100,19 @@ def _findings(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None
         print(f"  {event['state']:<18} {event['event_id']:<32} {event['kind']:<18} {effect_text}")
 
 
+def _check_migration(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None:
+    from .migration_check import check_migration
+
+    try:
+        report = check_migration(Path(args.database))
+    except (FileNotFoundError, sqlite3.DatabaseError) as exc:
+        parser.error(str(exc))
+    for line in report.lines():
+        print(line)
+    if not report.ok:
+        sys.exit(1)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="conductress-control")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -131,6 +145,14 @@ def main() -> None:
     findings.add_argument(
         "--publish", action="store_true", help="Write canary/findings.json and canary/consistency.json"
     )
+    check = subparsers.add_parser(
+        "check-migration",
+        help=(
+            "Run the database migration on a temporary copy of a database file and report row counts, "
+            "integrity checks and whether any existing row changed. The file itself is never written."
+        ),
+    )
+    check.add_argument("database", help="Path to a database file (a backup copy is best)")
     args = parser.parse_args()
 
     if args.command == "hash-token":
@@ -144,6 +166,9 @@ def main() -> None:
         return
     if args.command == "findings":
         _findings(args, parser)
+        return
+    if args.command == "check-migration":
+        _check_migration(args, parser)
         return
 
     config = ControlConfig.from_env()

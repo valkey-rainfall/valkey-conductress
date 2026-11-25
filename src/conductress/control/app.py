@@ -192,6 +192,7 @@ def create_app(
         findings_interval_seconds=config.findings_interval_seconds,
         results_jsonl_path=config.results_jsonl_path,
     )
+    service.fill_usage_platforms()
     service.expire_stale_claims(actor="system:startup")
     service.publish_canary_status()
     scheduler = CanaryScheduler(database, registry, canary_profiles)
@@ -224,6 +225,7 @@ def create_app(
     app.router.add_get("/api/v1/fleet/{runner_id}", _fleet_runner)
     app.router.add_put("/api/v1/runners/{runner_id}/status", _push_status)
     app.router.add_post("/api/v1/runners/{runner_id}/claim", _claim_task)
+    app.router.add_post("/api/v1/runners/{runner_id}/usage", _post_usage)
     app.router.add_post("/api/v1/tasks/{task_id}/accept", _accept_task)
     app.router.add_post("/api/v1/tasks/{task_id}/complete", _complete_task)
     app.router.add_post("/api/v1/tasks/{task_id}/fail", _fail_task)
@@ -380,6 +382,13 @@ async def _claim_task(request: web.Request) -> web.Response:
     if claim is None:
         return web.Response(status=204)
     return _response(claim=claim)
+
+
+async def _post_usage(request: web.Request) -> web.Response:
+    runner_id = request.match_info["runner_id"]
+    _require_runner(request, runner_id)
+    stored = request.app[SERVICE_KEY].record_runner_usage(runner_id, await _json_body(request))
+    return _response(stored=stored, http_status=201 if stored else 200)
 
 
 async def _accept_task(request: web.Request) -> web.Response:

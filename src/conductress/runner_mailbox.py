@@ -16,6 +16,7 @@ from .outcome_size import DEFAULT_MAX_OUTCOME_BYTES, is_permanent_rejection, tri
 from .runner_identity import get_runner_config
 from .tail_reader import find_record_by_task_id
 from .task_queue import BaseTaskData, TaskQueue
+from .usage_outbox import UsageOutbox
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +69,7 @@ class RunnerMailbox:
         self.mode = mode
         self.runner_id = get_runner_config().runner_id
         self.journal = DeliveryJournal(journal_path)
+        self.usage_outbox = UsageOutbox(journal_path.with_name("fleet_usage_outbox.json"))
         self._client_factory = client_factory
         self.max_outcome_bytes = max_outcome_bytes if max_outcome_bytes is not None else _max_outcome_bytes_from_env()
         if self.max_outcome_bytes < 1024:
@@ -428,6 +430,40 @@ class RunnerMailbox:
         logger.error("outcome for %s could not be delivered in any form: %s", task_id, reason)
         self._record_downgrade(task_id, "dropped", reason, [], size, None)
         self.journal.clear_active()
+
+    def record_local_usage(self, task: BaseTaskData, *, task_class: str, started_at: str, outcome: str) -> None:
+        """Queue the usage of a task that ran from this runner's own queue, then try to deliver it.
+
+        Only a live mailbox posts usage. A failure here never affects the task.
+        """
+        if self.mode != "live":
+            return
+        try:
+            self.usage_outbox.add(
+                {
+                    "schema_version": 1,
+                    "task_id": task.task_id,
+                    "task_class": task_class,
+                    "started_at": started_at,
+                    "ended_at": _utc_text(),
+                    "outcome": outcome,
+                }
+            )
+        except OSError as exc:
+            logger.warning("usage record for %s not saved: %s", task.task_id, exc)
+            return
+        self.flush_usage()
+
+    def flush_usage(self) -> None:
+        """Deliver queued usage records. Best effort: the next boundary tries again."""
+        if self.mode != "live":
+            return
+        try:
+            client = self._client_factory()
+        except FleetClientError as exc:
+            logger.warning("usage not delivered: %s", exc)
+            return
+        self.usage_outbox.flush(lambda record: client.post_usage(self.runner_id, record))
 
     def push_status(self, status: dict[str, Any]) -> bool:
         if not self.enabled:
