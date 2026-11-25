@@ -7,7 +7,9 @@ from enum import Enum
 from pathlib import Path
 from typing import Optional
 
-# TODO fix paths for remote hosts?
+# The root of this checkout. `conductress setup` installs Conductress at ~/conductress on every
+# host, so this path is also valid on a remote host that has the same user name. A command that
+# must work for another user name uses a "~/conductress/..." string, as REMOTE_MEMTIER_BENCHMARK does.
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
 PERF_BENCH_KEYSPACE = 3_000_000
