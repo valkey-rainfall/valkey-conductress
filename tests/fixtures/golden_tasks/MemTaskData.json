@@ -32,5 +32,6 @@
   "field_size": 0,
   "user_data_bytes": 0,
   "populate_mode": "random",
-  "settle": false
+  "settle": false,
+  "item_count": 5000000
 }

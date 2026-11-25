@@ -5,7 +5,9 @@ The same definitions apply to every engine (Valkey, Redis, and any server that a
 
 ## Definitions
 
-All values are bytes per item. N is the item count the task reached (5,000,000 in the sweep).
+All values are bytes per item. N is the item count the task reached (5,000,000 in the sweep). A manual task can
+fill another count with `queue add-memory --item-count N` (10,000 to 50,000,000); the sweep always uses the default.
+The task result records `item_count` (reached) and `item_count_requested`.
 
 | Name | Definition |
 |---|---|
