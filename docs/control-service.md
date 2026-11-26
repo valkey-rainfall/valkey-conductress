@@ -392,6 +392,8 @@ Public summary. After each task end, cancel, and runner usage post, the service 
 
 Reading a task. `GET /api/v1/tasks/{id}` and `GET /api/v1/batches/{id}` with a user token return the caller's own tasks and any finished task (`completed` or `failed`, which is a result). Another login's queued, running, pending or cancelled task answers 404 as if it did not exist. An operator token reads everything.
 
+Fleet directory. `GET /api/v1/fleet` with a user token (any scope) returns the runners as routing data only: `runner_id`, `display_name`, `platform`, `platform_aliases`, `enabled` and `archived`. It has no runner status, host details, queue or task counts, so a user token can resolve a platform to a runner when it submits. `GET /api/v1/fleet/{runner_id}` stays operator-only, and a runner token gets 403 on both. See `agent-access.md` for the MCP server that uses these routes.
+
 The migration only adds the table and one `schema_migrations` row, in one transaction. It copies values out of `tasks` to fill the table (platform is filled at the next service start from the fleet manifest) and does not change any existing row. It is safe to run again. To check a database before deploying, run the migration on a temporary copy:
 
 ```bash

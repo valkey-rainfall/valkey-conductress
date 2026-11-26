@@ -1596,6 +1596,16 @@ class ControlService:
             )
         return entries
 
+    # What a user token may read about a runner: the fleet manifest, enough to route a task.
+    _DIRECTORY_KEYS = ("runner_id", "display_name", "platform", "platform_aliases", "enabled", "archived")
+
+    def fleet_directory(self) -> list[dict[str, Any]]:
+        """The runners as routing data only: no status, host details, queue or task counts."""
+        return [
+            {key: runner[key] for key in self._DIRECTORY_KEYS if key in runner}
+            for runner in self.registry.list_runners()
+        ]
+
     def fleet_status(self, runner_id: Optional[str] = None) -> list[dict[str, Any]]:
         runners = (
             [self.registry.get_runner(runner_id, require_enabled=False)] if runner_id else self.registry.list_runners()

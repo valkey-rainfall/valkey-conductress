@@ -378,7 +378,11 @@ async def _usage_report(request: web.Request) -> web.Response:
 
 
 async def _fleet(request: web.Request) -> web.Response:
-    _require_operator(request)
+    identity = _require_submitter(request)
+    if identity.role != "operator":
+        # A user token may look up which runner a platform means, so it can route a task. The runner status,
+        # queue and task counts stay operator-only.
+        return _response(runners=request.app[SERVICE_KEY].fleet_directory())
     return _response(runners=request.app[SERVICE_KEY].fleet_status())
 
 

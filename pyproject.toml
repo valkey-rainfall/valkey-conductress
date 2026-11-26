@@ -37,6 +37,7 @@ dev = [
 [project.scripts]
 conductress = "conductress.__main__:main"
 conductress-control = "conductress.control.__main__:main"
+conductress-mcp = "conductress.mcp_server:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
