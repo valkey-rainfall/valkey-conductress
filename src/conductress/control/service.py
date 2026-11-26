@@ -1194,7 +1194,7 @@ class ControlService:
                 connection,
                 usage_from_task_row(
                     row,
-                    outcome="cancelled-running" if row["state"] == "cancel-requested" else terminal,
+                    outcome=self._usage_outcome(row, outcome),
                     ended_at=now,
                     platform=self._platform_of(runner_id),
                 ),
@@ -1226,6 +1226,22 @@ class ControlService:
         self._publish_outcome(self._task_from_row(updated))
         self.publish_usage_summary()
         return self._task_from_row(updated), True
+
+    @staticmethod
+    def _usage_outcome(row: sqlite3.Row, outcome: dict[str, Any]) -> str:
+        """The usage outcome follows how the task ended, not whether a cancel was asked for.
+
+        ``cancelled-running`` needs both a cancel request and the runner's
+        ``TaskCancelled`` failure. A task that finished anyway stays ``completed``, and a
+        failure for another reason stays ``failed``.
+        """
+        if (
+            row["state"] == "cancel-requested"
+            and outcome["state"] == "failed"
+            and str(outcome.get("error") or "").startswith("TaskCancelled")
+        ):
+            return "cancelled-running"
+        return outcome["state"]
 
     def _publish_outcome(self, task: dict[str, Any]) -> None:
         """Persist the completed task as JSONL and a static per-task JSON file.
