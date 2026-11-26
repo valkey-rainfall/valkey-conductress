@@ -14,7 +14,7 @@ def _usage(control_env, task_id=None):
     return rows if task_id is None else next((r for r in rows if r["task_id"] == task_id), None)
 
 
-def _outcome(task_id, state="completed", completed_at="2026-08-29T00:10:00Z"):
+def _outcome(task_id, state="completed", completed_at="2026-08-29T00:10:00Z", error=None):
     return {
         "schema_version": 1,
         "task_id": task_id,
@@ -22,7 +22,7 @@ def _outcome(task_id, state="completed", completed_at="2026-08-29T00:10:00Z"):
         "state": state,
         "completed_at": completed_at,
         "result": {},
-        "error": None,
+        "error": error,
     }
 
 
@@ -75,8 +75,55 @@ def test_cancelled_running_task_is_recorded_when_the_runner_reports(control_env)
     _accept(service)
     service.cancel_task("task-1", actor="operator:example-operator")
     assert _usage(control_env) == []
-    service.record_outcome("armbench", "task-1", _outcome("task-1", state="failed"), actor="runner:armbench")
+    cancelled = _outcome("task-1", state="failed", error="TaskCancelled: cancelled by the operator")
+    service.record_outcome("armbench", "task-1", cancelled, actor="runner:armbench")
     assert _usage(control_env, "task-1")["outcome"] == "cancelled-running"
+
+
+def test_cancel_that_loses_the_race_to_completion_is_completed(control_env):
+    service = control_env["service"]
+    _accept(service)
+    service.cancel_task("task-1", actor="operator:example-operator")
+    task, _ = service.record_outcome("armbench", "task-1", _outcome("task-1"), actor="runner:armbench")
+    assert task["state"] == "completed"
+    assert _usage(control_env, "task-1")["outcome"] == "completed"
+
+
+def test_failure_after_cancel_request_for_another_reason_is_failed(control_env):
+    service = control_env["service"]
+    _accept(service)
+    service.cancel_task("task-1", actor="operator:example-operator")
+    failed = _outcome("task-1", state="failed", error="RuntimeError: server crashed")
+    service.record_outcome("armbench", "task-1", failed, actor="runner:armbench")
+    assert _usage(control_env, "task-1")["outcome"] == "failed"
+
+
+def test_cancelled_error_without_a_cancel_request_is_failed(control_env):
+    service = control_env["service"]
+    _accept(service)
+    cancelled = _outcome("task-1", state="failed", error="TaskCancelled: cancelled by the operator")
+    service.record_outcome("armbench", "task-1", cancelled, actor="runner:armbench")
+    assert _usage(control_env, "task-1")["outcome"] == "failed"
+
+
+def test_cancel_after_the_outcome_arrived_changes_nothing(control_env):
+    service = control_env["service"]
+    _accept(service)
+    service.record_outcome("armbench", "task-1", _outcome("task-1"), actor="runner:armbench")
+    service.cancel_task("task-1", actor="operator:example-operator")
+    rows = _usage(control_env)
+    assert [(r["task_id"], r["outcome"]) for r in rows] == [("task-1", "completed")]
+
+
+def test_cancel_while_claimed_is_cancelled_queued_and_the_runner_cannot_accept(control_env):
+    service = control_env["service"]
+    service.submit_task(task_envelope("task-1"), actor="operator:example-operator")
+    claim = service.claim_task("armbench", actor="runner:armbench")
+    service.cancel_task("task-1", actor="operator:example-operator")
+    assert _usage(control_env, "task-1")["outcome"] == "cancelled-queued"
+    with pytest.raises(ControlError):
+        service.accept_task("armbench", "task-1", claim["claim_token"], actor="runner:armbench")
+    assert len(_usage(control_env)) == 1
 
 
 def test_runner_usage_is_stored_once_with_server_computed_seconds(control_env):
