@@ -285,6 +285,49 @@ sudo systemctl start conductress.service
 or, for a memory definition change, `--all-memory` and `--all-memory --engine
 redis` in place of the two `--workload` lines.
 
+### Pruning the build cache
+
+`~/build_cache/{source}/{commit}/{make_args_hash}/` holds one entry per built
+commit and nothing removes entries. `conductress build-cache prune` lists
+and, on request, removes old ones. An operator runs it by hand on the runner
+host; the service, the sweep and any schedule never call it.
+
+```
+conductress sweep pause <ids>        # keep new tasks from starting while it runs
+conductress build-cache prune        # dry run: count, size, oldest, newest, first 20 names
+conductress build-cache prune --apply
+conductress sweep resume
+```
+
+Without `--apply` nothing is removed. `--apply` refuses to start (exit 3) while
+a `valkey-server`, `redis-server`, `cachecannon`, `memtier_benchmark` or
+`valkey-benchmark` process exists, `benchmark_queue` is not empty, or
+`fleet_delivery.json` has an active task. These are the deploy scripts' idle
+conditions. It checks again after every 10 removals and stops if the runner
+becomes busy.
+
+An entry is kept when:
+
+- it was used in the last `--min-age-days` (default 60). Last use is the newest
+  modification or access time of any file in the entry. Access time needs a
+  mount without `noatime`; `relatime` is enough. Both only make it keep more.
+- its commit is a point, a landmark, the last benchmarked head, or the newest
+  merge commit in any state file in `sweep_data/` or `sweep_data/v3/` (all
+  series, live ones and memory ones). The files are read line by line, so
+  memory stays small (about 15 MB for a 1.4 GB file). A state file that is not in
+  the layout `SweepState.save` writes stops the run.
+- it is the pinned `SWEEP_V3_CACHECANNON_COMMIT` or the checked-out HEAD of
+  `~/valkey` or `~/redis`.
+- it is not a cache entry: a name or layout that does not match
+  (listed as "skipped"), or a symlink anywhere in it.
+
+`--max-size-gb N` removes only the oldest removable entries, until the cache is
+at or under N GB; the other entries stay. Each removed entry is one directory,
+checked first (no symlink, resolves to exactly
+`<cache>/<source>/<commit>/<make_args_hash>`), and is appended to
+`build_cache_prune.log` (`--log-file`). A removed commit is rebuilt when a task
+asks for it again.
+
 ### Environment periods
 
 Every point a coordinator records now carries the task id, the result row's

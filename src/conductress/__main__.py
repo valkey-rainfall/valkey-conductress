@@ -73,6 +73,7 @@ def main() -> None:
     subparsers.add_parser("remote", help="Inspect and cancel remote tasks", add_help=False)
     subparsers.add_parser("canary", help="Canary drift monitoring", add_help=False)
     subparsers.add_parser("compare", help="Run analysis/comparison", add_help=False)
+    subparsers.add_parser("build-cache", help="Prune old build cache entries (dry run unless --apply)", add_help=False)
     runner_info_parser = subparsers.add_parser("runner-info", help="Show stable runner identity and environment")
     runner_info_parser.add_argument("--json", action="store_true", help="Emit versioned machine-readable JSON")
     subparsers.add_parser("status", help="Show runner and task status (non-blocking)")
@@ -399,6 +400,11 @@ def main() -> None:
         from conductress.fleet_cli import main as fleet_cli_main
 
         sys.exit(fleet_cli_main([args.command] + remaining))
+
+    elif args.command == "build-cache":
+        from conductress.build_cache import main as build_cache_main
+
+        sys.exit(build_cache_main(remaining))
 
     elif args.command == "compare":
         from conductress.analysis import main as analysis_main
