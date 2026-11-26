@@ -439,3 +439,134 @@ def test_the_command_is_reachable_from_the_main_entry_point():
     with patch("sys.argv", ["conductress", "build-cache", "prune", "--help"]), pytest.raises(SystemExit) as stop:
         main()
     assert stop.value.code == 0
+
+
+# --- manually uploaded entries, listing and sizes -------------------------------------------------
+
+
+def test_manually_uploaded_entries_are_always_kept(env):
+    manual = make_entry(env["root"], config.MANUALLY_UPLOADED, sha(1), age_days=900)
+    old = make_entry(env["root"], "valkey", sha(2), age_days=900)
+    _, text = run(env, "--apply")
+    assert manual.exists() and not old.exists()
+    assert "Keep (not rebuildable (manually uploaded)): 1 entries" in text
+    assert "to remove" in text and f"{config.MANUALLY_UPLOADED}: 1 entries, 0 to remove" in text
+
+
+def test_manually_uploaded_entries_are_kept_with_a_size_cap_and_no_min_age(env):
+    manual = make_entry(env["root"], config.MANUALLY_UPLOADED, sha(1), age_days=900)
+    run(env, "--apply", "--max-size-gb", "0", "--min-age-days", "0")
+    assert manual.exists()
+
+
+def test_manually_uploaded_entries_are_not_in_the_dry_run_list(env):
+    make_entry(env["root"], config.MANUALLY_UPLOADED, sha(1), age_days=900)
+    _, text = run(env, "--list-all")
+    assert "Would remove: 0 entries" in text
+    assert f"  {config.MANUALLY_UPLOADED}/{sha(1)}" not in text
+
+
+def test_remove_entry_refuses_a_manually_uploaded_entry_directly(env):
+    manual = make_entry(env["root"], config.MANUALLY_UPLOADED, sha(1), age_days=900)
+    with pytest.raises(ValueError, match="never removed"):
+        bc.remove_entry(env["root"], _entry(manual, source=config.MANUALLY_UPLOADED))
+    assert manual.exists()
+
+
+def test_apply_plan_does_not_remove_a_manual_entry_that_was_put_in_the_plan(env):
+    manual = make_entry(env["root"], config.MANUALLY_UPLOADED, sha(1), age_days=900)
+    entries, skipped = bc.scan_cache(env["root"], [config.MANUALLY_UPLOADED])
+    plan = bc.Plan(remove=entries)
+    removed, _, _ = bc.apply_plan(
+        plan, env["root"], log_path=env["tmp"] / "p.log", is_busy=lambda: [], now=NOW, min_age_days=0, out=io.StringIO()
+    )
+    assert removed == 0 and manual.exists()
+    assert "failed" in (env["tmp"] / "p.log").read_text()
+
+
+def test_every_repository_source_is_rebuildable_and_only_manual_uploads_are_not():
+    assert bc.not_rebuildable(config.MANUALLY_UPLOADED)
+    assert not any(bc.not_rebuildable(name) for name in config.REPO_NAMES)
+    assert not any(bc.not_rebuildable(name) for name in ("valkey", "redis", "valkey-rainfall"))
+
+
+def test_dry_run_lists_twenty_names_and_list_all_lists_every_entry(env):
+    for n in range(1, 31):
+        make_entry(env["root"], "valkey", sha(n), age_days=100 + n)
+    _, short = run(env)
+    _, full = run(env, "--list-all")
+    names = r"^  valkey/[0-9a-f]{40}/0123456789abcdef  apparent"
+    assert len(re.findall(names, short, re.M)) == 20 and "... and 10 more (--list-all prints every entry)" in short
+    assert len(re.findall(names, full, re.M)) == 30 and "... and" not in full
+
+
+def test_the_summary_counts_entries_per_source(env):
+    for n in range(1, 4):
+        make_entry(env["root"], "valkey", sha(n), age_days=200)
+    make_entry(env["root"], "redis", sha(10), age_days=200)
+    make_entry(env["root"], "redis", sha(11), age_days=1)
+    make_entry(env["root"], config.MANUALLY_UPLOADED, sha(12), age_days=200)
+    _, text = run(env)
+    assert "  valkey: 3 entries, 3 to remove" in text
+    assert "  redis: 2 entries, 1 to remove" in text
+    assert f"  {config.MANUALLY_UPLOADED}: 1 entries, 0 to remove" in text
+
+
+def test_sizes_are_named_apparent_and_allocated(env):
+    leaf = make_entry(env["root"], "valkey", sha(1), age_days=200)
+    with open(leaf / "sparse", "wb") as handle:
+        handle.truncate(10 << 20)  # 10 MiB apparent, almost nothing allocated
+    entries, _ = bc.scan_cache(env["root"], ["valkey"])
+    assert entries[0].apparent >= 10 << 20
+    assert entries[0].size < entries[0].apparent
+    _, text = run(env)
+    assert re.search(r"Would remove: 1 entries, apparent [\d.]+ [GM]iB, allocated [\d.]+ [GM]iB", text)
+    assert "Allocated size is disk blocks" in text
+
+
+def test_a_hard_linked_file_is_counted_once_in_an_entry(env):
+    leaf = make_entry(env["root"], "valkey", sha(1), age_days=200)
+    (plain,) = [e for e in bc.scan_cache(env["root"], ["valkey"])[0]]
+    os.link(leaf / "valkey-server", leaf / "copy")
+    (linked,) = [e for e in bc.scan_cache(env["root"], ["valkey"])[0]]
+    assert linked.size == plain.size  # the second link adds a directory entry, not blocks
+    assert linked.apparent == plain.apparent  # du -sb style: one inode, one size
+
+
+def test_the_freed_estimate_needs_every_link_inside_the_removed_entries(env):
+    a = make_entry(env["root"], "valkey", sha(1), age_days=200)
+    b = make_entry(env["root"], "valkey", sha(2), age_days=200)
+    os.link(a / "valkey-server", b / "shared")
+    entries, _ = bc.scan_cache(env["root"], ["valkey"])
+    first, second = entries
+    both = bc.freed_estimate([first, second])
+    one = bc.freed_estimate([first])
+    assert both > one  # the shared file is freed only when both links go
+    assert both == first.size + second.size - 4096  # the shared 4 KiB counts once
+
+
+def test_last_use_says_which_time_it_is(env):
+    assert "noatime" in bc.last_use_note("rw,noatime,seclabel")
+    assert "build time" in bc.last_use_note("rw,noatime")
+    assert "mtime or atime" in bc.last_use_note("rw,relatime")
+    assert "mtime or atime" in bc.last_use_note(None)
+
+
+def test_mount_options_reads_the_longest_matching_mount(tmp_path):
+    info = tmp_path / "mountinfo"
+    target = tmp_path / "cache"
+    target.mkdir()
+    info.write_text(
+        "1 0 8:1 / / rw,relatime - xfs /dev/a rw\n"
+        f"2 1 8:2 / {tmp_path} rw,noatime - xfs /dev/b rw\n"
+        "3 1 8:3 / /elsewhere rw,relatime - xfs /dev/c rw\n"
+    )
+    assert bc.mount_options(target, info) == "rw,noatime"
+    assert bc.mount_options(target, tmp_path / "missing") is None
+
+
+def test_the_dry_run_prints_the_last_use_note(env, monkeypatch):
+    make_entry(env["root"], "valkey", sha(1), age_days=200)
+    monkeypatch.setattr(bc, "mount_options", lambda path: "rw,noatime")
+    _, text = run(env)
+    assert "Last use = newest mtime of any file in the entry. This file system is mounted noatime" in text
