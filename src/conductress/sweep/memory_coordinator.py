@@ -5,11 +5,10 @@ Each workload gets its own state file and sweep planner instance.
 Engine-aware: works with any engine (Valkey, Redis) via SweepEngine config.
 """
 
-import json
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from conductress.config import (
     CONDUCTRESS_RESULTS,
@@ -21,6 +20,7 @@ from conductress.config import (
 from conductress.heap_profiler import with_jemalloc_prof
 from conductress.sweep.coordinator import SWEEP_SOURCE, BaseSweepCoordinator
 from conductress.sweep.planner import SweepTask
+from conductress.tail_reader import CONTINUE, find_newest_row
 from conductress.task_queue import BaseTaskData
 from conductress.tasks.task_mem_efficiency import MemTaskData
 from conductress.topology import TopologySpec
@@ -198,16 +198,11 @@ class MemorySweepCoordinator(BaseSweepCoordinator):
         if not output_file.exists():
             return None
 
-        for line in reversed(output_file.read_text().strip().splitlines()):
-            try:
-                entry = json.loads(line)
-                if entry.get("task_id") == task.task_id:
-                    score = entry.get("score")
-                    if score and score > 0:
-                        return (score, 0.0, 1)
-            except (ValueError, KeyError, TypeError):
-                continue
-        return None
+        def accept(entry: dict) -> Any:
+            score = entry.get("score")
+            return (score, 0.0, 1) if score and score > 0 else CONTINUE
+
+        return find_newest_row(output_file, task.task_id, accept)
 
     def _extract_memory_record(self, task: BaseTaskData) -> Optional[dict]:
         """Extract the task's memory record (identity, settle, used_memory and RSS samples)."""
@@ -216,16 +211,12 @@ class MemorySweepCoordinator(BaseSweepCoordinator):
         if not output_file.exists():
             return None
 
-        for line in reversed(output_file.read_text().strip().splitlines()):
-            try:
-                entry = json.loads(line)
-                if entry.get("task_id") == task.task_id:
-                    results = entry.get("data", {}).get("results", [])
-                    record = results[0].get("memory_record") if results else None
-                    return record if isinstance(record, dict) else None
-            except (ValueError, KeyError, TypeError):
-                continue
-        return None
+        def accept(entry: dict) -> Any:
+            results = entry.get("data", {}).get("results", [])
+            record = results[0].get("memory_record") if results else None
+            return record if isinstance(record, dict) else None
+
+        return find_newest_row(output_file, task.task_id, accept)
 
     def _extract_breakdown(self, task: BaseTaskData) -> Optional[dict[str, float]]:
         """Extract per-category breakdown from the task output."""
@@ -234,17 +225,11 @@ class MemorySweepCoordinator(BaseSweepCoordinator):
         if not output_file.exists():
             return None
 
-        for line in reversed(output_file.read_text().strip().splitlines()):
-            try:
-                entry = json.loads(line)
-                if entry.get("task_id") == task.task_id:
-                    data = entry.get("data", {})
-                    results = data.get("results", [])
-                    if results and results[0].get("breakdown"):
-                        return results[0]["breakdown"]
-            except (ValueError, KeyError, TypeError):
-                continue
-        return None
+        def accept(entry: dict) -> Any:
+            results = entry.get("data", {}).get("results", [])
+            return results[0]["breakdown"] if results and results[0].get("breakdown") else CONTINUE
+
+        return find_newest_row(output_file, task.task_id, accept)
 
     def _extract_raw_stacks(self, task: BaseTaskData) -> Optional[list[list]]:
         """Extract retained resolved stacks from the task output."""
@@ -253,17 +238,11 @@ class MemorySweepCoordinator(BaseSweepCoordinator):
         if not output_file.exists():
             return None
 
-        for line in reversed(output_file.read_text().strip().splitlines()):
-            try:
-                entry = json.loads(line)
-                if entry.get("task_id") == task.task_id:
-                    data = entry.get("data", {})
-                    results = data.get("results", [])
-                    if results and results[0].get("raw_stacks"):
-                        return results[0]["raw_stacks"]
-            except (ValueError, KeyError, TypeError):
-                continue
-        return None
+        def accept(entry: dict) -> Any:
+            results = entry.get("data", {}).get("results", [])
+            return results[0]["raw_stacks"] if results and results[0].get("raw_stacks") else CONTINUE
+
+        return find_newest_row(output_file, task.task_id, accept)
 
     def on_task_completed(self, task: BaseTaskData) -> None:
         """Record the measuring task's point; a breakdown task only adds the breakdown to its point."""

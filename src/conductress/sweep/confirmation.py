@@ -55,6 +55,7 @@ from typing import Any, Iterable, Iterator, Optional, Sequence
 
 from conductress import config
 from conductress.public_fields import check_public_text, public_change_label, public_text
+from conductress.tail_reader import find_newest_row
 
 logger = logging.getLogger(__name__)
 
@@ -207,13 +208,7 @@ def find_row(results_file: Path, task_id: str) -> Optional[dict[str, Any]]:
     """The result row of ``task_id`` (the newest one), or None."""
     if not results_file.exists():
         return None
-    for line in reversed(results_file.read_text(encoding="utf-8").splitlines()):
-        if task_id not in line:
-            continue
-        row = _parse_row(line)
-        if row is not None and row.get("task_id") == task_id:
-            return row
-    return None
+    return find_newest_row(results_file, task_id)
 
 
 # --------------------------------------------------------------------------- pairs
