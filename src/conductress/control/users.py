@@ -144,7 +144,8 @@ def _parse_human(record: dict, login: str) -> User:
         raise ValueError(f"user {login}: unknown user fields: {', '.join(sorted(unknown))}")
     github = record.get("github")
     role = record.get("role")
-    quota = record.get("quota_runner_minutes_per_day")
+    # No quota means no limit (0): a login is held only when an operator gives it a quota.
+    quota = record.get("quota_runner_minutes_per_day", 0)
     sources = record.get("sources", [])
     if not isinstance(github, str) or not github:
         raise ValueError(f"user {login}: github must be a non-empty string")

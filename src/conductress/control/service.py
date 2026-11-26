@@ -15,13 +15,14 @@ from typing import Any, Optional
 from jsonschema import Draft202012Validator, FormatChecker
 from jsonschema.exceptions import ValidationError
 
-from ..duration_estimator import estimate_task_duration_seconds
+from ..duration_estimator import DEFAULT_TASK_DURATION_SECONDS, estimate_task_duration_seconds
 from ..public_fields import public_canary_status, public_usage_summary
 from ..task_envelope import DEFAULT_PRIORITY
 from .canary_profiles import CanaryProfileRegistry
 from .db import ControlDatabase, parse_utc, utc_now, utc_text
 from .drift_analyzer import DriftAnalyzer
 from .errors import AuthorizationError, ConflictError, ControlError, NotFoundError
+from .fair_share import CUTOFF_HALF_LIVES, Head, choose_head, recent_usage
 from .fleet_registry import FleetRegistry
 from .provenance import ProvenanceGate, ProvenanceVerdict
 from .schema import load_schema
@@ -92,6 +93,7 @@ class ControlService:
         published_canary_dir: Optional[Any] = None,
         published_sweep_dir: Optional[Any] = None,
         findings_interval_seconds: int = 3600,
+        fair_share_half_life_hours: float = 24.0,
     ):
         self.database = database
         self.registry = registry
@@ -114,6 +116,8 @@ class ControlService:
         # canary directory, which is the same web root on the data host.
         self.published_sweep_dir = published_sweep_dir if published_sweep_dir is not None else self.published_canary_dir
         self.findings_interval_seconds = findings_interval_seconds
+        # 0 turns fair share off: the next task is then the oldest of the highest class and priority.
+        self.fair_share_half_life_seconds = fair_share_half_life_hours * 3600.0
         self._findings_lock = threading.Lock()
         self._findings_published_at: Optional[float] = None
         self._usage_publish_failed = False
@@ -1009,12 +1013,7 @@ class ControlService:
             if existing:
                 result = self._claim_response(existing)
             else:
-                row = connection.execute(
-                    "SELECT * FROM tasks WHERE runner_id=? AND state='queued' "
-                    "ORDER BY CASE task_class WHEN 'manual' THEN 3 WHEN 'canary' THEN 2 ELSE 1 END DESC, "
-                    "priority DESC, submitted_at ASC, task_id ASC LIMIT 1",
-                    (runner_id,),
-                ).fetchone()
+                row = self._next_queued_task(connection, runner_id, now)
                 if row:
                     claim_token = secrets.token_urlsafe(32)
                     updated = connection.execute(
@@ -1040,6 +1039,84 @@ class ControlService:
         for audit in audits:
             self.database.append_audit_jsonl(audit)
         return result
+
+    def _next_queued_task(self, connection: sqlite3.Connection, runner_id: str, now: datetime) -> Optional[sqlite3.Row]:
+        """The queued task this runner claims next.
+
+        Order: class (manual, canary, sweep), then priority, then fair share between logins
+        (see fair_share.py), then first in first out. Fair share only chooses between logins
+        that have a task in the highest class and priority, so an operator priority still wins.
+        With one such login, or with fair share off, this is the plain order of earlier versions.
+        """
+        top = connection.execute(
+            "SELECT * FROM tasks WHERE runner_id=? AND state='queued' "
+            "ORDER BY CASE task_class WHEN 'manual' THEN 3 WHEN 'canary' THEN 2 ELSE 1 END DESC, "
+            "priority DESC, submitted_at ASC, task_id ASC LIMIT 1",
+            (runner_id,),
+        ).fetchone()
+        if top is None or self.fair_share_half_life_seconds <= 0:
+            return top
+        heads = self._queued_heads(connection, runner_id, top)
+        if len(heads) < 2 or len(heads) > self._FAIR_SHARE_MAX_LOGINS:
+            return top
+        usage = self._recent_usage(connection, runner_id, [head.agent for head in heads], now)
+        chosen = choose_head(heads, usage)
+        if chosen is None or chosen.task_id == top["task_id"]:
+            return top
+        return connection.execute("SELECT * FROM tasks WHERE task_id = ?", (chosen.task_id,)).fetchone()
+
+    # shortcut: more competing logins than this get the plain order (the usage query lists them as
+    # SQL parameters); raise it with the SQLite parameter limit in mind when a fleet has more logins.
+    _FAIR_SHARE_MAX_LOGINS = 500
+
+    def _queued_heads(self, connection: sqlite3.Connection, runner_id: str, top: sqlite3.Row) -> list[Head]:
+        """The first queued task of each login in the top class and priority, oldest first."""
+        rows = connection.execute(
+            "SELECT task_id, COALESCE(submitter_login, submitted_by) AS agent, submitted_at FROM tasks "
+            "WHERE runner_id=? AND state='queued' AND task_class=? AND priority=? "
+            "ORDER BY submitted_at ASC, task_id ASC",
+            (runner_id, top["task_class"], top["priority"]),
+        )
+        first: dict[str, sqlite3.Row] = {}
+        for row in rows:
+            first.setdefault(row["agent"], row)
+        heads = []
+        for row in first.values():
+            envelope = connection.execute(
+                "SELECT envelope_json FROM tasks WHERE task_id=?", (row["task_id"],)
+            ).fetchone()
+            heads.append(Head(row["agent"], row["task_id"], row["submitted_at"], self._expected_seconds(envelope[0])))
+        return heads
+
+    @staticmethod
+    def _expected_seconds(envelope_json: str) -> float:
+        """Expected duration of a task from its envelope (no host calibration on the server)."""
+        try:
+            return float(estimate_task_duration_seconds(json.loads(envelope_json).get("task", {})))
+        except (json.JSONDecodeError, TypeError, ValueError, AttributeError):
+            return float(DEFAULT_TASK_DURATION_SECONDS)
+
+    def _recent_usage(
+        self, connection: sqlite3.Connection, runner_id: str, agents: list[str], now: datetime
+    ) -> dict[str, float]:
+        """Decayed runner seconds of these logins on this runner, from task_usage rows of the last 8 half-lives.
+
+        Reads only rows of this runner and these logins that ended after the cutoff (index
+        idx_task_usage_ended). A task that is running now is not counted: a runner is asked to
+        claim only when it owns no accepted task.
+        """
+        cutoff = utc_text(now - timedelta(seconds=CUTOFF_HALF_LIVES * self.fair_share_half_life_seconds))
+        marks = ",".join("?" for _ in agents)
+        rows = connection.execute(
+            "SELECT submitted_by, runner_seconds, ended_at FROM task_usage "
+            f"WHERE ended_at >= ? AND runner_id = ? AND submitted_by IN ({marks})",
+            (cutoff, runner_id, *agents),
+        )
+        return recent_usage(
+            ((r["submitted_by"], r["runner_seconds"], parse_utc(r["ended_at"])) for r in rows),
+            now,
+            self.fair_share_half_life_seconds,
+        )
 
     @staticmethod
     def _claim_response(row: sqlite3.Row) -> dict[str, Any]:

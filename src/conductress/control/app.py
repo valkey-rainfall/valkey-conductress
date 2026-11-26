@@ -191,6 +191,7 @@ def create_app(
         published_sweep_dir=config.published_sweep_dir,
         findings_interval_seconds=config.findings_interval_seconds,
         results_jsonl_path=config.results_jsonl_path,
+        fair_share_half_life_hours=config.fair_share_half_life_hours,
     )
     service.fill_usage_platforms()
     service.publish_usage_summary()
