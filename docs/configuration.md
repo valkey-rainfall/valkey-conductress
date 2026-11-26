@@ -294,7 +294,8 @@ host; the service, the sweep and any schedule never call it.
 
 ```
 conductress sweep pause <ids>        # keep new tasks from starting while it runs
-conductress build-cache prune        # dry run: count, size, oldest, newest, first 20 names
+conductress build-cache prune        # dry run: counts per source, sizes, oldest, newest, first 20 names
+conductress build-cache prune --list-all   # same, with every entry that would be removed
 conductress build-cache prune --apply
 conductress sweep resume
 ```
@@ -308,9 +309,16 @@ becomes busy.
 
 An entry is kept when:
 
-- it was used in the last `--min-age-days` (default 60). Last use is the newest
-  modification or access time of any file in the entry. Access time needs a
-  mount without `noatime`; `relatime` is enough. Both only make it keep more.
+- it is under the `manually_uploaded` source. A hand-uploaded binary cannot be
+  rebuilt from a commit, so these entries are never removed, with or without
+  `--min-age-days` or `--max-size-gb`. (Every other source is a git clone, so
+  its entries are rebuilt by a build.)
+- its last use is within `--min-age-days` (default 60). Last use is the newest
+  modification or access time of any file in the entry. On a file system
+  mounted `noatime` (the runners) nothing updates the access time, so it is the
+  build time (newest mtime), not a use time; an entry that ran recently but
+  is not a series point can be removed and is then rebuilt. The command prints
+  which time it used. `relatime` is enough to make access time count.
 - its commit is a point, a landmark, the last benchmarked head, or the newest
   merge commit in any state file in `sweep_data/` or `sweep_data/v3/` (all
   series, live ones and memory ones). The files are read line by line, so
@@ -320,6 +328,13 @@ An entry is kept when:
   `~/valkey` or `~/redis`.
 - it is not a cache entry: a name or layout that does not match
   (listed as "skipped"), or a symlink anywhere in it.
+
+Sizes are printed twice. Apparent is the sum of file sizes (each hard-linked
+file once). Allocated is disk blocks (`st_blocks * 512`), each hard-linked file
+once, and for a removal it counts a shared file only when every link is removed.
+The space really freed (`df`) can still be lower than allocated, for example
+when files share blocks through reflink; the command cannot see that. Check
+`df` after a run.
 
 `--max-size-gb N` removes only the oldest removable entries, until the cache is
 at or under N GB; the other entries stay. Each removed entry is one directory,

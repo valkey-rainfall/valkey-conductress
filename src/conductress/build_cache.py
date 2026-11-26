@@ -51,11 +51,19 @@ BUSY_PROCESS_NAMES = ("valkey-server", "redis-server", "cachecannon", "memtier_b
 DEFAULT_MIN_AGE_DAYS = 60
 RECHECK_EVERY = 10  # re-test "idle" after this many deletions
 LIST_LIMIT = 20
+
+# Sources whose entries cannot be rebuilt from a git commit. They are never removed.
+# (Every name in config.REPO_NAMES is a git clone, so its entries are rebuilt by a build.)
 _GIB = 1 << 30
 
 EXIT_OK = 0
 EXIT_ERROR = 2
 EXIT_BUSY = 3
+
+
+def not_rebuildable(source: str) -> bool:
+    """True for a source whose cache entries cannot be rebuilt by building a commit (a hand-uploaded binary)."""
+    return source == config.MANUALLY_UPLOADED
 
 
 class StateFileError(Exception):
@@ -70,8 +78,11 @@ class Entry:
     commit: str
     args_hash: str
     path: Path
-    size: int  # bytes on disk
+    size: int  # allocated bytes (st_blocks * 512), each hard-linked file counted once in the entry
     last_use: float  # newest mtime or atime in the entry, unix seconds
+    apparent: int = 0  # sum of file sizes
+    # Files with more than one link: (device, inode) -> (allocated bytes, link count, links found in this entry).
+    shared: dict = field(default_factory=dict)
 
     @property
     def name(self) -> str:
@@ -222,10 +233,19 @@ def checked_out_heads(home: Path, sources: Iterable[str]) -> set[str]:
 # --------------------------------------------------------------------------- scanning
 
 
-def _measure(path: Path) -> Optional[tuple[int, float]]:
-    """Return (bytes on disk, newest mtime or atime) of a tree, or None if it contains a symlink."""
-    total = 0
+@dataclass
+class Measured:
+    apparent: int  # sum of file sizes
+    allocated: int  # st_blocks * 512, each hard-linked file once
+    last_use: float
+    shared: dict  # hard-linked files: (device, inode) -> [allocated bytes, link count, links found]
+
+
+def _measure(path: Path) -> Optional[Measured]:
+    """Size and newest time of a tree, or None if it contains a symlink."""
+    apparent = allocated = 0
     newest = 0.0
+    shared: dict = {}
     stack = [path]
     while stack:
         with os.scandir(stack.pop()) as it:
@@ -233,15 +253,42 @@ def _measure(path: Path) -> Optional[tuple[int, float]]:
                 info = item.stat(follow_symlinks=False)
                 if item.is_symlink():
                     return None
-                total += info.st_blocks * 512
                 if item.is_dir(follow_symlinks=False):
                     # Listing a directory sets its access time, so only its modification time counts.
                     newest = max(newest, info.st_mtime)
+                    allocated += info.st_blocks * 512
                     stack.append(Path(item.path))
+                    continue
+                newest = max(newest, info.st_mtime, info.st_atime)
+                if info.st_nlink > 1:
+                    key = (info.st_dev, info.st_ino)
+                    if key not in shared:
+                        apparent += info.st_size
+                    seen = shared.setdefault(key, [info.st_blocks * 512, info.st_nlink, 0])
+                    seen[2] += 1
                 else:
-                    newest = max(newest, info.st_mtime, info.st_atime)
+                    apparent += info.st_size
+                    allocated += info.st_blocks * 512
     info = path.lstat()
-    return total + info.st_blocks * 512, max(newest, info.st_mtime)
+    allocated += info.st_blocks * 512 + sum(blocks for blocks, _, _ in shared.values())
+    return Measured(apparent, allocated, max(newest, info.st_mtime), shared)
+
+
+def freed_estimate(entries: Iterable[Entry]) -> int:
+    """Allocated bytes that removing these entries frees: a hard-linked file counts once, and only when
+    every link to it is inside these entries.
+
+    shortcut: files that share disk blocks through reflink or copy-on-write are not detected, so the space
+    really freed can be lower. Upgrade to FIEMAP shared-extent checks if the numbers keep differing from df.
+    """
+    total = 0
+    links: dict = {}
+    for entry in entries:
+        total += entry.size - sum(blocks for blocks, _, _ in entry.shared.values())
+        for key, (blocks, nlink, found) in entry.shared.items():
+            seen = links.setdefault(key, [blocks, nlink, 0])
+            seen[2] += found
+    return total + sum(blocks for blocks, nlink, found in links.values() if found >= nlink)
 
 
 def scan_cache(root: Path, sources: Iterable[str]) -> tuple[list[Entry], list[str]]:
@@ -269,8 +316,18 @@ def scan_cache(root: Path, sources: Iterable[str]) -> tuple[list[Entry], list[st
                 if measured is None:
                     skipped.append(f"{rel}/{leaf.name} (contains a symlink)")
                     continue
-                size, last_use = measured
-                entries.append(Entry(source_dir.name, commit_dir.name, leaf.name, leaf, size, last_use))
+                entries.append(
+                    Entry(
+                        source_dir.name,
+                        commit_dir.name,
+                        leaf.name,
+                        leaf,
+                        measured.allocated,
+                        measured.last_use,
+                        measured.apparent,
+                        measured.shared,
+                    )
+                )
     return entries, skipped
 
 
@@ -293,8 +350,10 @@ def make_plan(
     cutoff = now - min_age_days * 86400
     removable = []
     for entry in sorted(entries, key=lambda e: e.last_use):
-        if entry.last_use >= cutoff:
-            plan.kept.setdefault(f"used within {min_age_days:g} days", []).append(entry)
+        if not_rebuildable(entry.source):
+            plan.kept.setdefault("not rebuildable (manually uploaded)", []).append(entry)
+        elif entry.last_use >= cutoff:
+            plan.kept.setdefault(f"last use within {min_age_days:g} days", []).append(entry)
         elif entry.commit in series:
             plan.kept.setdefault("a point, landmark or tip of a sweep series", []).append(entry)
         elif entry.commit in pinned:
@@ -325,6 +384,8 @@ def validated_entry_path(root: Path, entry: Entry) -> Path:
     """
     if not (COMMIT_RE.match(entry.commit) and ARGS_HASH_RE.match(entry.args_hash)) or "/" in entry.source:
         raise ValueError(f"not a cache entry name: {entry.name}")
+    if not_rebuildable(entry.source):
+        raise ValueError(f"{entry.name} cannot be rebuilt and is never removed")
     real_root = root.resolve()
     expected = real_root / entry.source / entry.commit / entry.args_hash
     path = entry.path
@@ -351,7 +412,9 @@ def remove_entry(root: Path, entry: Entry) -> None:
 def _log(handle: IO[str], status: str, entry: Entry, detail: str = "") -> None:
     stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     used = datetime.fromtimestamp(entry.last_use, timezone.utc).strftime("%Y-%m-%d")
-    handle.write(f"{stamp} {status} {entry.name} size={entry.size} last_use={used}{(' ' + detail) if detail else ''}\n")
+    handle.write(
+        f"{stamp} {status} {entry.name} allocated={entry.size} apparent={entry.apparent} last_use={used}{(' ' + detail) if detail else ''}\n"
+    )
     handle.flush()
 
 
@@ -365,11 +428,12 @@ def apply_plan(
     min_age_days: float,
     out=sys.stdout,
 ) -> tuple[int, int, int]:
-    """Delete the planned entries one by one. Returns (removed, freed bytes, exit code).
+    """Delete the planned entries one by one. Returns (removed, allocated bytes freed, exit code).
 
     Stops with EXIT_BUSY when the runner stops being idle. An entry used again since the scan is left alone.
     """
-    removed = freed = 0
+    removed = 0
+    gone: list[Entry] = []
     cutoff = now - min_age_days * 86400
     log_path.parent.mkdir(parents=True, exist_ok=True)
     with log_path.open("a", encoding="utf-8") as log:
@@ -378,12 +442,12 @@ def apply_plan(
                 reasons = is_busy()
                 if reasons:
                     print(f"stopped: the runner is busy ({'; '.join(reasons)})", file=out)
-                    return removed, freed, EXIT_BUSY
+                    return removed, freed_estimate(gone), EXIT_BUSY
             try:
                 measured = _measure(validated_entry_path(root, entry))
                 if measured is None:
                     raise ValueError("contains a symlink")
-                if measured[1] >= cutoff:
+                if measured.last_use >= cutoff:
                     _log(log, "kept-used-again", entry)
                     continue
                 remove_entry(root, entry)
@@ -393,39 +457,80 @@ def apply_plan(
                 continue
             _log(log, "removed", entry)
             removed += 1
-            freed += entry.size
-    return removed, freed, EXIT_OK
+            gone.append(entry)
+    return removed, freed_estimate(gone), EXIT_OK
 
 
 # --------------------------------------------------------------------------- command
 
 
 def _gib(size: int) -> str:
-    return f"{size / _GIB:.1f} GiB"
+    return f"{size / _GIB:.1f} GiB" if size >= _GIB else f"{size / (1 << 20):.1f} MiB"
 
 
 def _day(stamp: float) -> str:
     return datetime.fromtimestamp(stamp, timezone.utc).strftime("%Y-%m-%d")
 
 
-def print_plan(plan: Plan, *, apply: bool, out=sys.stdout) -> None:
+def _sizes(entries: list[Entry], *, freed: bool = False) -> str:
+    """Apparent size (sum of file sizes) and allocated size (disk blocks, hard links once in an entry).
+
+    With ``freed`` the allocated figure is the estimate of the space removing the entries frees.
+    """
+    allocated = freed_estimate(entries) if freed else sum(e.size for e in entries)
+    return f"apparent {_gib(sum(e.apparent for e in entries))}, allocated {_gib(allocated)}"
+
+
+def mount_options(path: Path, mountinfo: Path = Path("/proc/self/mountinfo")) -> Optional[str]:
+    """Mount options of the file system that holds ``path`` (longest matching mount point), or None."""
+    try:
+        target = str(path.resolve())
+        best, options = "", None
+        for line in mountinfo.read_text().splitlines():
+            fields = line.split()
+            point = fields[4].replace("\\040", " ")
+            if (target == point or target.startswith(point.rstrip("/") + "/")) and len(point) >= len(best):
+                best, options = point, fields[5]
+        return options
+    except (OSError, IndexError):
+        return None
+
+
+def last_use_note(options: Optional[str]) -> str:
+    if options is not None and "noatime" in options.split(","):
+        return "newest mtime of any file in the entry. This file system is mounted noatime, so it is the build time, not a use time."
+    return "newest mtime or atime of any file in the entry."
+
+
+def print_plan(plan: Plan, *, apply: bool, list_all: bool = False, mount: Optional[str] = None, out=sys.stdout) -> None:
     verb = "Removing" if apply else "Would remove"
-    print(f"Cache: {plan.total_entries} entries, {_gib(plan.total_bytes)}", file=out)
+    print(f"Last use = {last_use_note(mount)}", file=out)
+    allentries = [e for entries in plan.kept.values() for e in entries] + plan.remove
+    print(f"Cache: {plan.total_entries} entries, {_sizes(allentries)}", file=out)
+    per_source: dict[str, list[int]] = {}
+    for entry in allentries:
+        per_source.setdefault(entry.source, [0, 0])[0] += 1
+    for entry in plan.remove:
+        per_source[entry.source][1] += 1
+    for source, (count, removing) in sorted(per_source.items()):
+        print(f"  {source}: {count} entries, {removing} to remove", file=out)
     for reason, entries in sorted(plan.kept.items()):
-        print(f"Keep ({reason}): {len(entries)} entries, {_gib(sum(e.size for e in entries))}", file=out)
+        print(f"Keep ({reason}): {len(entries)} entries, {_sizes(entries)}", file=out)
     if plan.skipped:
         print(f"Skipped (not a cache entry, left alone): {len(plan.skipped)}", file=out)
         for name in plan.skipped[:LIST_LIMIT]:
             print(f"  {name}", file=out)
-    print(f"{verb}: {len(plan.remove)} entries, {_gib(sum(e.size for e in plan.remove))}", file=out)
+    print(f"{verb}: {len(plan.remove)} entries, {_sizes(plan.remove, freed=True)}", file=out)
     if plan.remove:
         oldest, newest = plan.remove[0], plan.remove[-1]
         print(f"  oldest: {oldest.name} (last use {_day(oldest.last_use)})", file=out)
         print(f"  newest: {newest.name} (last use {_day(newest.last_use)})", file=out)
-        for entry in plan.remove[:LIST_LIMIT]:
-            print(f"  {entry.name}  {_gib(entry.size)}  last use {_day(entry.last_use)}", file=out)
-        if len(plan.remove) > LIST_LIMIT:
-            print(f"  ... and {len(plan.remove) - LIST_LIMIT} more", file=out)
+        shown = plan.remove if list_all else plan.remove[:LIST_LIMIT]
+        for entry in shown:
+            print(f"  {entry.name}  apparent {_gib(entry.apparent)}  last use {_day(entry.last_use)}", file=out)
+        if len(shown) < len(plan.remove):
+            print(f"  ... and {len(plan.remove) - len(shown)} more (--list-all prints every entry)", file=out)
+    print("Allocated size is disk blocks, hard links counted once; the space really freed can be lower.", file=out)
 
 
 def prune(
@@ -462,7 +567,7 @@ def prune(
         entries, skipped, now=now, min_age_days=args.min_age_days, series=series, pinned=pinned, max_size_bytes=cap
     )
     print(f"Sweep state: {len(files)} files, {len(series)} commits in the keep set", file=out)
-    print_plan(plan, apply=args.apply, out=out)
+    print_plan(plan, apply=args.apply, list_all=args.list_all, mount=mount_options(root), out=out)
     if cap is not None and plan.total_bytes - sum(e.size for e in plan.remove) > cap:
         print("Note: the entries that stay are larger than --max-size-gb.", file=out)
 
@@ -483,7 +588,7 @@ def prune(
     removed, freed, code = apply_plan(
         plan, root, log_path=log_path, is_busy=is_busy, now=now, min_age_days=args.min_age_days, out=out
     )
-    print(f"Removed {removed} entries, {_gib(freed)}. Log: {log_path}", file=out)
+    print(f"Removed {removed} entries, allocated {_gib(freed)}. Log: {log_path}", file=out)
     return code
 
 
@@ -506,6 +611,9 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=None,
         help="Remove only the oldest removable entries, until the cache is at or under this size",
+    )
+    prune_parser.add_argument(
+        "--list-all", action="store_true", help="Print every entry that would be removed, not only the first 20"
     )
     prune_parser.add_argument(
         "--cache-dir", default="~/build_cache", help="Build cache directory (default ~/build_cache)"
