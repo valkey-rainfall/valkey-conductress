@@ -207,6 +207,37 @@ still apply to the coordinators that `conductress sweep export` and
 `export-archived` build; they are simply unreachable from the archived runtime
 path, which builds no v1 coordinator at all.
 
+### Reserved sweep share (off by default)
+
+A runner started on a remote queue runs a sweep task only when nothing else can be claimed. A
+long queue of manual tasks can therefore starve the sweep, including the tip and release
+measurements that keep the dashboard current. `sweep_config.json` can reserve a share of the
+runner's time for the sweep while it has work that must not wait:
+
+```json
+{"sweep_share": 25}
+```
+
+- `sweep_share` is a number from 0 to 100 (percent). Absent, 0 or invalid means off, and the
+  order of earlier versions applies exactly. Nothing is changed by upgrading.
+- **Need.** A series has need while its planner's next task is a `NIGHTLY` tip that was not
+  measured, a missing release `LANDMARK`, or a `BISECTION` (an adjacent pair of points that
+  differs by at least the series threshold, is significant, and has commits between them).
+  `BACKFILL` and the confirmation sweep never count. A retired or paused series has no need. The
+  check reads only the state the planner holds and the HEAD seen at the last scheduling pass; it
+  runs no git command and writes nothing, so a tip that moved since that pass counts from the
+  next pass.
+- **Rule.** At a task boundary, after hand-queued tasks and after a task the runner already owns,
+  and before a remote claim: if a series has need and the sweep used less than the share of the
+  recent runner time (sweep seconds over all seconds, decayed with a 24 hour half-life), the sweep
+  task runs next. Otherwise remote tasks go first, as before. A task that is already claimed or
+  running is never displaced. With need but no remote task waiting, the sweep runs at once.
+- The window of recent time is kept in memory and starts empty when the runner starts.
+- **Switch on or off at runtime.** The file is read at every task boundary, so editing it takes
+  effect at the next boundary and needs no restart: set `sweep_share`, or remove it (or set 0) to
+  switch off. `conductress sweep pause|focus|resume` keep the value. No stored data, series file or
+  history changes either way.
+
 ### Resetting a series
 
 A series' measurement definition is part of its identity, so a change to it —

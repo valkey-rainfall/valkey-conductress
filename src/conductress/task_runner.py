@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Optional, Protocol
 
 from conductress.sweep.planner import TaskPriority
+from conductress.sweep.share import ShareWindow, sweep_goes_first
 from conductress.sweep_config import load_sweep_config
 from conductress.task_queue import BaseTaskRunner
 
@@ -81,6 +82,9 @@ class TaskRunner:
         # Usage class of a task from the local queue: "local" (queued by hand)
         # or "sweep" (queued by the sweep scheduler just before it was taken).
         self._local_task_class = "local"
+        # Recent runner time of sweep and other tasks, for the optional sweep share (sweep_config.json).
+        self._share_window = ShareWindow()
+        self._clock = time.monotonic
         self._subscribers: list[TaskSubscriber] = []
         self._publish_target = publish_target
         self._mailbox = mailbox
@@ -333,6 +337,14 @@ class TaskRunner:
             self._local_task_class = "local"
             return local
 
+        # Off unless sweep_config.json sets sweep_share: then nothing below this line runs.
+        if self._sweep_owed_first():
+            self._schedule_next()
+            owed = queue.get_next_task()
+            if owed is not None:
+                self._local_task_class = "sweep"
+                return owed
+
         if self._mailbox:
             remote = self._mailbox.poll(queue)
             if remote is not None:
@@ -345,6 +357,29 @@ class TaskRunner:
         if scheduled is not None:
             self._local_task_class = "sweep"
         return scheduled
+
+    def _sweep_owed_first(self) -> bool:
+        """True when the sweep has need and has used less than its configured share of recent runner time.
+
+        Called at a task boundary, so nothing is running and a claimed task is never displaced. With no
+        ``sweep_share`` (the default) it answers False without asking any coordinator.
+        """
+        config = load_sweep_config()
+        if not sweep_goes_first(config.sweep_share, True, self._share_window.fraction(self._clock())):
+            return False
+        return self._sweep_has_need(config)
+
+    def _sweep_has_need(self, config) -> bool:
+        """True if any series that may run now (not retired, not paused) has work that must not wait."""
+        for sub in self._epoch_ordered_subscribers():
+            if getattr(sub, "retired", False) is True:
+                continue
+            wid = getattr(sub, "workload_id", None)
+            if wid and not config.is_allowed(wid, getattr(sub, "epoch_id", "v1")):
+                continue
+            if getattr(sub, "has_need", lambda: False)() is True:
+                return True
+        return False
 
     def _settle_management(self) -> None:
         if (self._mailbox is not None or self._publish_target) and self._management_settle_seconds:
@@ -385,7 +420,10 @@ class TaskRunner:
             self._settle_management()
             started_at = _utc_text()
             # Decided now: the journal stops owning a remote task once its outcome is delivered.
-            reports_usage = self._mailbox is not None and not self._mailbox.owns(task.task_id)
+            owned_remotely = self._mailbox is not None and self._mailbox.owns(task.task_id)
+            reports_usage = self._mailbox is not None and not owned_remotely
+            is_sweep = self._local_task_class == "sweep" and not owned_remotely
+            started_clock = self._clock()
             try:
                 await self.__run_task(task)
             except Exception as exc:
@@ -412,6 +450,7 @@ class TaskRunner:
                     self._record_local_usage(task, started_at, "completed")
                 self._publish_boundary("completed", task)
 
+            self._share_window.add(self._clock() - started_clock, is_sweep=is_sweep, now=self._clock())
             self.task = self._choose_next(queue)
 
     def _record_local_usage(self, task: BaseTaskData, started_at: str, outcome: str) -> None:
