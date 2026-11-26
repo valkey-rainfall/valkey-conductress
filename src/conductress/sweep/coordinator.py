@@ -34,7 +34,7 @@ from conductress.config import (
     SWEEP_WARMUP,
 )
 from conductress.sweep.git_ops import fetch_ref, get_head, get_merge_commits, get_release_branch_points
-from conductress.sweep.planner import Landmark, SweepPlanner, SweepState, SweepTask, TaskPriority
+from conductress.sweep.planner import NEED_PRIORITIES, Landmark, SweepPlanner, SweepState, SweepTask, TaskPriority
 from conductress.task_queue import BaseTaskData, TaskQueue
 from conductress.tasks.task_perf_benchmark import PerfTaskData
 from conductress.topology import TopologySpec
@@ -150,6 +150,8 @@ class BaseSweepCoordinator(ABC):
         self.state = SweepState.load(state_file)
         self.planner = self._new_planner()
         self._last_fetch_time: float = 0.0
+        # HEAD as of the last time the scheduler asked for a task. ``has_need`` reads it so it never runs git.
+        self._last_head: Optional[str] = None
 
     def _new_planner(self) -> SweepPlanner:
         """A planner over the current state, shaped by the engine's scope."""
@@ -378,6 +380,21 @@ class BaseSweepCoordinator(ABC):
             return None
         return (task.priority.value, -task.magnitude, self.last_scheduled_at)
 
+    def has_need(self) -> bool:
+        """True while this series has work that must not wait behind a long queue of other tasks.
+
+        Need is the kind of the planner's next task: ``NIGHTLY`` (the tip was not measured),
+        ``LANDMARK`` (a release commit is missing) or ``BISECTION`` (an adjacent pair of points
+        differs by at least the series threshold, is significant, and has commits between them).
+        ``BACKFILL`` never counts. This only reads what the planner already holds, plus the HEAD
+        seen at the last scheduling pass, so it runs no git command and writes nothing. A tip that
+        moved after that pass counts as need from the next pass on.
+        """
+        if self.retired or self.schedule_key() is None:
+            return False
+        task = self.planner.get_next_task(current_head=self._last_head)
+        return task is not None and task.priority in NEED_PRIORITIES
+
     # Whether this series' gap-filling backfill yields to every other series'
     # pending work.  A subclass sets it for a metric whose flat regions carry no
     # information anyone is waiting for (memory: deterministic, rarely moves).
@@ -546,6 +563,7 @@ class BaseSweepCoordinator(ABC):
         except Exception as e:
             logger.warning("Failed to get HEAD: %s", e)
             current_head = None
+        self._last_head = current_head
         return self.planner.get_next_task(current_head)
 
     def _fetch_and_refresh(self) -> None:

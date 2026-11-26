@@ -7,6 +7,8 @@ Config format:
     {"mode": "normal"}                     -- all sweeps active (default)
     {"mode": "focus", "target": "memory-set-64b"}  -- only this workload runs
     {"mode": "paused", "paused": ["throughput"]}   -- these sweeps skip their turn
+    {"sweep_share": 25}                    -- reserve 25 percent of this runner's time for the sweep
+                                              while it has need (0 or absent: off, the default)
 
 Selectors may be epoch-qualified. A bare ``workload_id`` matches that workload in
 every epoch (the pre-epoch behaviour, preserved for existing config files), while
@@ -78,6 +80,7 @@ class SweepConfig:
     mode: str = "normal"  # "normal", "focus", "paused"
     target: Optional[str] = None  # selector to focus on (mode=focus)
     paused: Optional[list[str]] = None  # list of selectors to skip (mode=paused)
+    sweep_share: float = 0.0  # percent of runner time reserved for the sweep while it has need; 0 = off
 
     def __post_init__(self):
         if self.paused is None:
@@ -92,6 +95,14 @@ class SweepConfig:
         return True  # normal mode
 
 
+def _parse_share(value: Any) -> float:
+    """A share from 0 to 100 percent. Anything else is off (0), with a warning."""
+    if isinstance(value, (int, float)) and not isinstance(value, bool) and 0 <= value <= 100:
+        return float(value)
+    logger.warning("Invalid sweep_share %r in sweep_config.json (use 0 to 100) - the share is off", value)
+    return 0.0
+
+
 def load_sweep_config() -> SweepConfig:
     """Load sweep config from disk. Returns default (normal) if file missing or invalid."""
     if not SWEEP_CONFIG_FILE.exists():
@@ -102,6 +113,7 @@ def load_sweep_config() -> SweepConfig:
             mode=data.get("mode", "normal"),
             target=data.get("target"),
             paused=data.get("paused", []),
+            sweep_share=_parse_share(data.get("sweep_share", 0)),
         )
     except (json.JSONDecodeError, TypeError, KeyError) as e:
         logger.warning("Invalid sweep_config.json: %s — using defaults", e)
@@ -115,23 +127,28 @@ def save_sweep_config(config: SweepConfig) -> None:
         data["target"] = config.target
     if config.paused:
         data["paused"] = config.paused
+    if config.sweep_share:
+        data["sweep_share"] = config.sweep_share
     SWEEP_CONFIG_FILE.write_text(json.dumps(data, indent=2) + "\n")
 
 
 def focus(workload_id: str) -> None:
     """Focus on a single workload — only it will run."""
-    save_sweep_config(SweepConfig(mode="focus", target=workload_id))
+    save_sweep_config(SweepConfig(mode="focus", target=workload_id, sweep_share=load_sweep_config().sweep_share))
     logger.info("Sweep focused on: %s", workload_id)
 
 
 def pause(workload_ids: list[str]) -> None:
     """Pause specific workloads — they won't queue new tasks."""
-    save_sweep_config(SweepConfig(mode="paused", paused=workload_ids))
+    save_sweep_config(SweepConfig(mode="paused", paused=workload_ids, sweep_share=load_sweep_config().sweep_share))
     logger.info("Paused sweeps: %s", workload_ids)
 
 
 def resume() -> None:
-    """Resume normal operation — all sweeps active."""
-    if SWEEP_CONFIG_FILE.exists():
+    """Resume normal operation (all sweeps active). A sweep share that is set stays set."""
+    share = load_sweep_config().sweep_share
+    if share:
+        save_sweep_config(SweepConfig(sweep_share=share))
+    elif SWEEP_CONFIG_FILE.exists():
         SWEEP_CONFIG_FILE.unlink()
     logger.info("Sweep config reset to normal")

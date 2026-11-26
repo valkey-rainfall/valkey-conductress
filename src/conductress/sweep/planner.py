@@ -43,6 +43,12 @@ class TaskPriority(Enum):
     CONFIRM = 5
 
 
+# The kinds of planner task that must not wait behind a long queue of other work: without them the
+# dashboard goes stale (tip, release) or a regression stays unlocated (bisection). BACKFILL and
+# CONFIRM run on spare capacity only.
+NEED_PRIORITIES = (TaskPriority.NIGHTLY, TaskPriority.LANDMARK, TaskPriority.BISECTION)
+
+
 @dataclass
 class BenchmarkPoint:
     """A single benchmarked commit with its result."""

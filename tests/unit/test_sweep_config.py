@@ -74,6 +74,50 @@ class TestLoadSaveConfig:
         assert config.mode == "normal"
 
 
+class TestSweepShare:
+    @pytest.fixture
+    def config_file(self, tmp_path, monkeypatch):
+        path = tmp_path / "sweep_config.json"
+        monkeypatch.setattr("conductress.sweep_config.SWEEP_CONFIG_FILE", path)
+        return path
+
+    def test_off_by_default(self, config_file):
+        assert SweepConfig().sweep_share == 0
+        assert load_sweep_config().sweep_share == 0  # no file
+        config_file.write_text('{"mode": "paused", "paused": ["x"]}')
+        assert load_sweep_config().sweep_share == 0  # a file from before the option
+
+    def test_loads_a_share(self, config_file):
+        config_file.write_text('{"sweep_share": 25}')
+        config = load_sweep_config()
+        assert (config.sweep_share, config.mode) == (25.0, "normal")
+
+    @pytest.mark.parametrize("value", ["25", -1, 101, None, True, [25]])
+    def test_a_bad_share_means_off(self, config_file, value):
+        config_file.write_text(json.dumps({"sweep_share": value}))
+        assert load_sweep_config().sweep_share == 0.0
+
+    def test_save_keeps_the_share_and_omits_it_when_off(self, config_file):
+        save_sweep_config(SweepConfig(sweep_share=25))
+        assert json.loads(config_file.read_text())["sweep_share"] == 25
+        save_sweep_config(SweepConfig())
+        assert "sweep_share" not in json.loads(config_file.read_text())
+
+    def test_pause_focus_and_resume_do_not_turn_the_share_off(self, config_file):
+        save_sweep_config(SweepConfig(sweep_share=25))
+        pause(["throughput"])
+        assert load_sweep_config().sweep_share == 25 and load_sweep_config().mode == "paused"
+        focus("memory-set-64b")
+        assert load_sweep_config().sweep_share == 25 and load_sweep_config().mode == "focus"
+        resume()
+        assert load_sweep_config().sweep_share == 25 and load_sweep_config().mode == "normal"
+
+    def test_resume_without_a_share_still_removes_the_file(self, config_file):
+        pause(["throughput"])
+        resume()
+        assert not config_file.exists()
+
+
 class TestConvenienceFunctions:
     def test_focus_writes_config(self, tmp_path, monkeypatch):
         config_file = tmp_path / "sweep_config.json"
