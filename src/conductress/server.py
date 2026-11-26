@@ -805,6 +805,18 @@ class Server:
             if tag.purpose == "server":
                 self._cpu_allocator.release(self.ip, tag)
 
+    def _host_valkey_cli(self) -> str:
+        """valkey-cli path for a command that runs on this server's host (through ``run_host_command``).
+
+        On this machine it is the checkout's own copy. On another host the checkout path (and its user name)
+        may not exist, so use the ``~/conductress`` copy that ``conductress setup`` installs there.
+        """
+        from conductress.runner_affinity import is_local_host  # imported here: runner_affinity imports Server
+
+        if is_local_host(self.ip):
+            return str(config.PROJECT_ROOT / config.VALKEY_CLI)
+        return config.REMOTE_VALKEY_CLI
+
     async def stop(self):
         # Release allocated CPUs
         if self.server_cpus:
@@ -830,9 +842,8 @@ class Server:
         if name != VALKEY_BINARY:
             raise RuntimeError(f"Process on port {self.port} is '{name}', expected '{VALKEY_BINARY}'")
 
-        cli_path = str(config.PROJECT_ROOT / config.VALKEY_CLI)
         await self.run_host_command(
-            f"{cli_path} -p {self.port} SHUTDOWN NOSAVE 2>/dev/null; "
+            f"{self._host_valkey_cli()} -p {self.port} SHUTDOWN NOSAVE 2>/dev/null; "
             f"for i in 1 2 3 4 5; do kill -0 {self.valkey_pid} 2>/dev/null || break; sleep 1; done; "
             f"kill -9 {self.valkey_pid} 2>/dev/null || true",
             check=False,

@@ -196,6 +196,7 @@ class TestHoistedDefaults:
 
     def test_remote_memtier_benchmark_default(self):
         assert config_module.REMOTE_MEMTIER_BENCHMARK == "~/conductress/memtier_benchmark"
+        assert config_module.REMOTE_VALKEY_CLI == "~/conductress/valkey-cli"
 
     def test_local_memtier_benchmark_under_project_root(self):
         assert config_module.MEMTIER_BENCHMARK == config_module.PROJECT_ROOT / "memtier_benchmark"

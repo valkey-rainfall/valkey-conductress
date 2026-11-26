@@ -53,6 +53,10 @@ PUBLISH_TARGET = os.environ.get("CONDUCTRESS_PUBLISH_TARGET", "ec2-user@data.con
 REMOTE_MEMTIER_BENCHMARK = "~/conductress/memtier_benchmark"
 MEMTIER_BENCHMARK = PROJECT_ROOT / "memtier_benchmark"
 
+# valkey-cli on a REMOTE benchmark host: bootstrap copies it to ~/conductress/valkey-cli. Same rule as
+# REMOTE_MEMTIER_BENCHMARK: the literal "~" is expanded by the remote shell, so it works for any user name.
+REMOTE_VALKEY_CLI = "~/conductress/valkey-cli"
+
 # cachecannon load generator binary on benchmark hosts. Like memtier, the task
 # command strings run on the remote host, so this default is the absolute path
 # cachecannon builds to there (~/cachecannon/target/release/cachecannon as
