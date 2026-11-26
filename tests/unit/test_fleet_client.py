@@ -206,3 +206,17 @@ def test_user_env_rejects_a_group_readable_user_token_file(monkeypatch, tmp_path
     with pytest.raises(FleetClientError) as error:
         FleetClientConfig.from_user_env()
     assert error.value.code == "TOKEN_FILE_PERMISSIONS"
+
+
+def test_user_env_only_never_falls_back_to_the_operator_token(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    for name in ("CONDUCTRESS_USER_TOKEN", "CONDUCTRESS_USER_TOKEN_FILE"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("CONDUCTRESS_OPERATOR_TOKEN", "operator-variable-token")
+    with pytest.raises(FleetClientError) as missing:
+        FleetClientConfig.from_user_env_only()
+    assert missing.value.code == "USER_TOKEN_MISSING"
+    assert FleetClientConfig.from_user_env().token == "operator-variable-token"  # the CLI keeps its fallback
+
+    monkeypatch.setenv("CONDUCTRESS_USER_TOKEN", "user-variable-token")
+    assert FleetClientConfig.from_user_env_only().token == "user-variable-token"
