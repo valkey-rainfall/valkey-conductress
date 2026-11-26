@@ -13,7 +13,8 @@
 #              owner may bypass the provenance gate and cancel anyone's tasks,
 #              and is implicitly an approver; approver may approve/reject
 #              pending submissions; collaborator is a normal allowlisted user
-#   quota_runner_minutes_per_day - daily runner-minute budget for the account
+#   quota_runner_minutes_per_day - optional daily runner-minute limit for the account.
+#              Leave it out for no limit: only a login with a quota is ever held for quota.
 #   sources  - build sources this login may name (repository short names /
 #              per-user forks). Empty means the built-in default sources only.
 #

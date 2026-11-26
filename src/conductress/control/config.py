@@ -43,6 +43,8 @@ class ControlConfig:
     canary_profiles_dir: Path = Path(__file__).resolve().parent.parent / "canary_profiles"
     claim_lease_seconds: int = 300
     max_body_bytes: int = DEFAULT_MAX_BODY_BYTES
+    # Half-life of the runner time that fair share counts against a login. 0 turns fair share off.
+    fair_share_half_life_hours: float = 24.0
 
     @classmethod
     def from_env(cls) -> "ControlConfig":
@@ -73,6 +75,7 @@ class ControlConfig:
             canary_profiles_dir=Path(os.environ.get("CANARY_PROFILES_DIR", str(default_profiles))),
             claim_lease_seconds=int(os.environ.get("CLAIM_LEASE_SECONDS", "300")),
             max_body_bytes=int(os.environ.get("MAX_BODY_BYTES", str(DEFAULT_MAX_BODY_BYTES))),
+            fair_share_half_life_hours=float(os.environ.get("FAIR_SHARE_HALF_LIFE_HOURS", "24")),
         )
 
     def validate(self) -> None:
@@ -80,5 +83,7 @@ class ControlConfig:
             raise ValueError("claim_lease_seconds must be positive")
         if self.findings_interval_seconds < 60:
             raise ValueError("findings_interval_seconds must be at least 60")
+        if self.fair_share_half_life_hours < 0:
+            raise ValueError("fair_share_half_life_hours must be 0 (off) or positive")
         if self.max_body_bytes < 1024:
             raise ValueError("max_body_bytes must be at least 1024")
