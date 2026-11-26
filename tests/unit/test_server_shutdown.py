@@ -13,6 +13,7 @@ class TestServerStop:
         """Verify stop() sends SHUTDOWN NOSAVE (required for jemalloc prof_final)."""
         server = Server.__new__(Server)
         server.port = 9000
+        server.ip = "127.0.0.1"
         server.valkey_pid = 12345
         server.server_cpus = None
         server._profiling = MagicMock()
@@ -41,6 +42,7 @@ class TestServerStop:
         """After stop(), valkey_pid is reset to -1."""
         server = Server.__new__(Server)
         server.port = 9000
+        server.ip = "127.0.0.1"
         server.valkey_pid = 99999
         server.server_cpus = None
         server._profiling = MagicMock()
@@ -66,6 +68,41 @@ class TestServerStop:
         await server.stop()
         # Should not call any commands
         server.run_host_command.assert_not_called()
+
+
+async def _stop_command(ip: str) -> str:
+    server = Server.__new__(Server)
+    server.port = 9000
+    server.ip = ip
+    server.valkey_pid = 12345
+    server.server_cpus = None
+    server.instance_dir = None
+    server._profiling = MagicMock()
+    server._profiling.cleanup = AsyncMock()
+    commands = []
+
+    async def mock_run(cmd, check=True):
+        commands.append(cmd)
+        return ("12345 ? valkey-server\n", "") if "ps -p" in cmd else ("", "")
+
+    server.run_host_command = mock_run
+    await server.stop()
+    return next(c for c in commands if "SHUTDOWN" in c)
+
+
+@pytest.mark.asyncio
+class TestStopValkeyCliPath:
+    async def test_local_host_uses_this_checkouts_valkey_cli(self):
+        from conductress import config
+
+        for ip in ("127.0.0.1", "localhost"):
+            command = await _stop_command(ip)
+            assert command.startswith(f"{config.PROJECT_ROOT / config.VALKEY_CLI} -p 9000 SHUTDOWN NOSAVE")
+
+    async def test_remote_host_uses_the_home_relative_path(self):
+        command = await _stop_command("198.51.100.7")
+        assert command.startswith("~/conductress/valkey-cli -p 9000 SHUTDOWN NOSAVE")
+        assert "/home/" not in command.split(" -p ")[0]
 
 
 @pytest.mark.asyncio
