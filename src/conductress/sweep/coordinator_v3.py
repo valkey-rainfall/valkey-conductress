@@ -28,7 +28,6 @@ Protocol values live in ``config`` and were confirmed by measurement -- see
 
 from __future__ import annotations
 
-import json
 import logging
 from pathlib import Path
 from statistics import stdev
@@ -66,6 +65,7 @@ from conductress.config import (
 )
 from conductress.sweep.coordinator import BaseSweepCoordinator, PerfCounterRecord, perf_counters_from_entry
 from conductress.sweep.planner import SweepTask
+from conductress.tail_reader import find_newest_row
 from conductress.task_queue import BaseTaskData
 from conductress.tasks.task_cachecannon import CachecannonTaskData
 from conductress.topology import TopologySpec
@@ -193,14 +193,7 @@ class BaseCachecannonSweepCoordinatorV3(BaseSweepCoordinator):
         output_file = CONDUCTRESS_RESULTS / "output.jsonl"
         if not output_file.exists():
             return None
-        for line in reversed(output_file.read_text().strip().splitlines()):
-            try:
-                entry = json.loads(line)
-                if entry.get("task_id") == task.task_id:
-                    return entry
-            except (ValueError, KeyError, TypeError):
-                continue
-        return None
+        return find_newest_row(output_file, task.task_id)
 
     def _extract_result(self, task: BaseTaskData) -> Optional[tuple[float, float, int]]:
         entry = self._find_task_entry(task)

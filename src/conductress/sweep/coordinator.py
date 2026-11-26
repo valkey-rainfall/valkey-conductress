@@ -5,7 +5,6 @@ and the pub/sub protocol. Subclasses define task creation and result extraction
 for specific metrics (throughput, memory, etc.).
 """
 
-import json
 import logging
 import time
 from abc import ABC, abstractmethod
@@ -35,6 +34,7 @@ from conductress.config import (
 )
 from conductress.sweep.git_ops import fetch_ref, get_head, get_merge_commits, get_release_branch_points
 from conductress.sweep.planner import NEED_PRIORITIES, Landmark, SweepPlanner, SweepState, SweepTask, TaskPriority
+from conductress.tail_reader import find_newest_row
 from conductress.task_queue import BaseTaskData, TaskQueue
 from conductress.tasks.task_perf_benchmark import PerfTaskData
 from conductress.topology import TopologySpec
@@ -252,14 +252,7 @@ class BaseSweepCoordinator(ABC):
         output_file = CONDUCTRESS_RESULTS / "output.jsonl"
         if not output_file.exists():
             return None
-        for line in reversed(output_file.read_text().strip().splitlines()):
-            try:
-                entry = json.loads(line)
-                if entry.get("task_id") == task.task_id:
-                    return entry
-            except (ValueError, KeyError, TypeError):
-                continue
-        return None
+        return find_newest_row(output_file, task.task_id)
 
     def _annotate_point(self, task: BaseTaskData) -> None:
         """Attach the task id, measurement time and reduced environment to the task's point.

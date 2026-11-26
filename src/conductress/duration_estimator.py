@@ -9,6 +9,8 @@ from dataclasses import asdict, is_dataclass
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
+from conductress.tail_reader import tail_lines
+
 DEFAULT_TASK_DURATION_SECONDS = 300
 
 
@@ -72,13 +74,11 @@ def estimate_task_duration_seconds(task: Any, calibration: Optional[Mapping[str,
 def load_duration_calibration(path: Path, *, max_records: int = 200) -> dict[str, float]:
     """Return median observed/expected factors by task family from recent unique tasks.
 
-    Reads the entire file. Prefer :func:`load_duration_calibration_from_lines`
-    with a pre-read tail for hot paths that also need recent results.
+    Reads only the last ``max_records * 2`` lines of the file. Prefer
+    :func:`load_duration_calibration_from_lines` with a pre-read tail for hot
+    paths that also need recent results.
     """
-    if not path.exists():
-        return {}
-    lines = path.read_text(encoding="utf-8").splitlines()
-    return load_duration_calibration_from_lines(lines, max_records=max_records)
+    return load_duration_calibration_from_lines(tail_lines(path, max_records * 2), max_records=max_records)
 
 
 def load_duration_calibration_from_lines(lines: list[str], *, max_records: int = 200) -> dict[str, float]:

@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Optional, Union
+from typing import IO, Any, Callable, Iterator, Optional, Union
 
 # Default chunk size for reverse reading.  64 KiB is large enough to capture
 # several typical JSONL records (~500-2000 bytes each) per read syscall.
@@ -110,6 +110,95 @@ def find_record_by_task_id(
                     return record
 
     return None
+
+
+# Returned by an ``accept`` function of :func:`find_newest_row` to say "not this one, keep looking".
+CONTINUE = object()
+
+
+def _reverse_lines(handle: IO[bytes], file_size: int, max_bytes: int, chunk_size: int) -> Iterator[bytes]:
+    """Yield the non-empty lines of the last ``max_bytes`` of the file, newest first.
+
+    Only one chunk and one carried line fragment are in memory at a time. If the
+    byte cap cuts a line, that first line is a fragment (it does not parse as JSON).
+    """
+    remainder = b""
+    pos = file_size
+    bytes_read = 0
+    while pos > 0 and bytes_read < max_bytes:
+        read_size = min(chunk_size, pos, max_bytes - bytes_read)
+        pos -= read_size
+        bytes_read += read_size
+        handle.seek(pos)
+        parts = (handle.read(read_size) + remainder).split(b"\n")
+        at_start = pos == 0 or bytes_read >= max_bytes
+        remainder = b"" if at_start else parts[0]
+        for part in reversed(parts if at_start else parts[1:]):
+            if part.strip():
+                yield part
+
+
+def find_newest_row(
+    path: Union[str, Path],
+    task_id: str,
+    accept: Callable[[dict[str, Any]], Any] = lambda row: row,
+    *,
+    max_bytes: int = FIND_RECORD_MAX_BYTES,
+    chunk_size: int = DEFAULT_CHUNK_SIZE,
+) -> Any:
+    """Return ``accept(row)`` for the newest row of ``task_id`` that ``accept`` takes, else None.
+
+    Same answer as scanning the whole file from the end (what the sweep
+    coordinators did with ``read_text().splitlines()``), with constant memory:
+
+    1. Look at the last ``max_bytes`` of the file, newest line first.
+    2. If nothing there is taken and the file is longer, stream the whole file
+       from the start, one line at a time, and keep the newest taken row.
+
+    A row is a JSON object whose top-level ``task_id`` equals ``task_id``. Lines
+    that are blank, not JSON or not objects are skipped. ``accept`` returns
+    ``CONTINUE`` (or raises ValueError, KeyError or TypeError) to refuse a row
+    and let an older row with the same task id be tried; any other return value,
+    including None, ends the search.
+
+    shortcut: the fallback reads the whole file once, which takes minutes on a
+    20 GB file. It only runs for a task whose row is older than ``max_bytes`` or
+    absent, which sweep tasks do not hit. Upgrade it to a size-limited scan from
+    the end if that changes.
+    """
+    path = Path(path)
+    try:
+        file_size = path.stat().st_size
+    except OSError:
+        return None
+    # A task id with no JSON escapes appears verbatim in its row, so most lines can be skipped unparsed.
+    needle = task_id.encode() if json.dumps(task_id)[1:-1] == task_id else b""
+
+    def taken(line: bytes) -> Any:
+        if needle not in line:
+            return CONTINUE
+        try:
+            row = json.loads(line)
+            if not isinstance(row, dict) or row.get("task_id") != task_id:
+                return CONTINUE
+            return accept(row)
+        except (ValueError, KeyError, TypeError):
+            return CONTINUE
+
+    with path.open("rb") as handle:
+        for line in _reverse_lines(handle, file_size, max_bytes, chunk_size):
+            value = taken(line)
+            if value is not CONTINUE:
+                return value
+        if file_size <= max_bytes:
+            return None  # the window was the whole file
+        found: Any = CONTINUE
+        handle.seek(0)
+        for line in handle:
+            value = taken(line)
+            if value is not CONTINUE:
+                found = value
+    return None if found is CONTINUE else found
 
 
 def tail_lines(
