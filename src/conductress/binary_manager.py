@@ -14,6 +14,7 @@ from typing import Optional
 import asyncssh
 
 from . import config
+from .memory_record import shell_path
 from .prebuilt_engine import VerifiedEngine, verify_prebuilt_engine
 from .ssh_host import SshHost
 from .utility import async_run
@@ -56,6 +57,19 @@ def _rpath_names_lua_module(readelf_dynamic_output: str) -> bool:
         if any(entry.rstrip("/").endswith(LUA_MODULE_RPATH_DIR) for entry in search_list.split(":")):
             return True
     return False
+
+
+_marker_warned = False
+
+
+def _warn_marker_once(logger: logging.Logger, entry_dir: Path, problem: str) -> None:
+    """Log the first failure to record a cache use in this process; later ones stay quiet."""
+    global _marker_warned
+    if not _marker_warned:
+        _marker_warned = True
+        logger.warning(
+            "could not record the use of cache entry %s (%s); further failures are not logged", entry_dir, problem
+        )
 
 
 class BinaryManager:
@@ -141,8 +155,10 @@ class BinaryManager:
         if not await self._host.check_file_exists(binary):
             return False
         if not await self._binary_needs_lua_module(binary):
+            await self._mark_used(cached_build_path)
             return True
         if await self._host.check_file_exists(cached_build_path / LUA_MODULE):
+            await self._mark_used(cached_build_path)
             return True
         self._logger.warning(
             "cached %s at %s needs %s but the entry has none; discarding the entry and rebuilding",
@@ -152,6 +168,22 @@ class BinaryManager:
         )
         await self._host.run_host_command(f"rm -rf {cached_build_path}")
         return False
+
+    async def _mark_used(self, entry_dir: Path) -> None:
+        """Record that a task is using this cache entry: touch ``<entry>/.last_used`` (created if missing).
+
+        The file systems of the runners are mounted noatime, so nothing else says when an entry was last
+        used. This is one short host command on a hit. It never fails the lookup: a problem is logged once
+        per process and ignored. Only the marker is touched, never the binary or the directory mode.
+        """
+        marker = shell_path(entry_dir / config.BUILD_CACHE_USE_MARKER)
+        try:
+            _, err = await self._host.run_host_command(f"touch {marker}", check=False)
+            problem = err.strip()
+        except Exception as exc:  # a lost connection or a refused command must not fail the task
+            problem = str(exc) or type(exc).__name__
+        if problem:
+            _warn_marker_once(self._logger, entry_dir, problem)
 
     async def _binary_needs_lua_module(self, binary: Path) -> bool:
         """Return True when the binary dlopens the dynamic Lua module at startup.

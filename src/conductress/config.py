@@ -785,6 +785,9 @@ assert MANUALLY_UPLOADED not in REPO_NAMES, "MANUALLY_UPLOADED must not overlap 
 
 # An engine installed by hand under PREBUILT_ENGINE_ROOT/<engine>/<tag>/ with a MANIFEST (see prebuilt_engine.py).
 # The root is a path on the benchmark host; the literal "~" is expanded by that host's shell.
+# Empty file inside a build cache entry; its modification time is the last time a task used the entry.
+BUILD_CACHE_USE_MARKER = ".last_used"
+
 PREBUILT_ENGINE = "prebuilt_engine"
 PREBUILT_ENGINE_ROOT = "~/engines"
 assert PREBUILT_ENGINE not in REPO_NAMES, "PREBUILT_ENGINE must not overlap with any repository names"
