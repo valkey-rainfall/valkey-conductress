@@ -602,6 +602,28 @@ silently selecting the wrong epoch.
 Booleans accept `1/true/yes/on` and `0/false/no/off` (case-insensitive); any
 other value, including an empty string, is a startup error.
 
+### Memory tasks for another engine
+
+`queue add-memory --engine {valkey,dragonfly,garnet}` (default `valkey`) measures an engine that is not built from
+a git commit. Valkey, and Redis built from source, keep the launch they always had; the default is unchanged.
+Another engine needs `--source manually_uploaded` (the binary is copied to the runner by hand, and the task records
+its sha256).
+
+`conductress/engines.py` holds one profile per engine: whether DEBUG HTSTATS exists, how the server process is
+named, the thread flag and fixed flags of its command line, and the process names the host-wide stop uses (exact
+names only). A non-Valkey engine is started pinned with `taskset`, in the background, with its output in the
+server log. Flag names come from each engine's public documentation; confirm each one against the `--help` of the
+pinned binary before the first run. No engine has been run by this code.
+
+The settle for such an engine has no rehash check (no DEBUG HTSTATS): it waits for used_memory to stop moving, reads
+every item once, waits again, then runs the stability check. The record says `settle.rehash_check: false`, and a
+report must say that the check was weaker. The task result also records `engine`. The task document carries
+`engine` only when it is not `valkey`.
+
+Tests use `tests/fixtures/fake_engine.py`, a small script that speaks the Redis commands a memory task sends, with
+a made-up memory model. The exact Valkey launch command lines are pinned in
+`tests/unit/golden/server_start_valkey.json`.
+
 ## Repositories
 
 `REPOSITORIES` in `config.py` is the built-in list of source repositories made

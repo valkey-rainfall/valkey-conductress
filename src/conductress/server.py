@@ -11,6 +11,7 @@ import asyncssh
 
 from conductress.binary_manager import BinaryManager
 from conductress.cpu_allocator import AllocationTag, CpuAllocator
+from conductress.engines import DEFAULT_ENGINE, get_engine
 from conductress.profiling_manager import ProfilingManager
 from conductress.runner_identity import REMOTE_ENVIRONMENT_COMMAND, parse_remote_environment
 from conductress.ssh_host import SshHost
@@ -101,7 +102,9 @@ class Server:
     # INITIALIZATION AND FACTORY METHODS
     # =============================================================================
 
-    def __init__(self, ip: str, port: int = 6379, username="", instance_dir: Optional[Path] = None) -> None:
+    def __init__(
+        self, ip: str, port: int = 6379, username="", instance_dir: Optional[Path] = None, engine: str = DEFAULT_ENGINE
+    ) -> None:
         """Create a handle for one valkey-server process on ``ip``:``port``.
 
         ``instance_dir`` is the server's working directory (``--dir``). It is
@@ -110,8 +113,13 @@ class Server:
         directory, so two instances in the same directory would clobber each
         other's RDB. ``None`` keeps the legacy behaviour (no ``--dir``, cwd of
         the launching shell) for the single-instance tasks.
+
+        ``engine`` names an entry of ``conductress.engines.ENGINES``. The default ``valkey`` is the launch
+        this class has always used (also for Redis); another engine gets the generic launch of its profile.
         """
         self._host = SshHost(ip, username)
+        get_engine(engine)  # ValueError for an unknown name, before anything is started
+        self.engine = engine
         self._binary = BinaryManager(self._host)
         self._profiling = ProfilingManager(self._host)
         self._stabilization = StabilizationManager(self._host)
@@ -198,10 +206,17 @@ class Server:
 
     @classmethod
     async def with_path(
-        cls, ip: str, port: int, binary_path: Path, io_threads: int, env_prefix: str = "", server_args: str = ""
+        cls,
+        ip: str,
+        port: int,
+        binary_path: Path,
+        io_threads: int,
+        env_prefix: str = "",
+        server_args: str = "",
+        engine: str = DEFAULT_ENGINE,
     ):
         """Create a server instance running the specified binary"""
-        server = cls(ip, port)
+        server = cls(ip, port, engine=engine)
         await server.start(binary_path, io_threads, env_prefix=env_prefix, server_args=server_args)
         return server
 
@@ -709,9 +724,23 @@ class Server:
                 self.port,
             )
         else:
-            needed_cpus = Server.get_num_cpus(self.threads)
+            needed_cpus = (
+                Server.get_num_cpus(self.threads)
+                if self._engine.valkey_launch
+                else self._engine.cpus_needed(self.threads)
+            )
             self.server_cpus = await self._allocate_server_cpus(needed_cpus)
 
+        if not self._engine.valkey_launch:
+            if self.instance_dir is not None and self._engine.dir_flag:
+                await self.run_host_command(f"mkdir -p {self.instance_dir}")
+            command = self._generic_launch_command(cached_binary_path, server_args)
+        else:
+            command = await self._valkey_launch_command(cached_binary_path, server_args)
+        await self._launch(command, cached_binary_path, env_prefix)
+
+    async def _valkey_launch_command(self, cached_binary_path: Path, server_args: str) -> str:
+        """The Valkey command line (Valkey and Redis). Its text is pinned by tests/unit/test_server_launch.py."""
         self.args = []
         if self.threads > 1:
             self.args += ["--io-threads", str(self.threads)]
@@ -740,12 +769,29 @@ class Server:
             await self.run_host_command(f"mkdir -p {self.instance_dir}")
             dir_arg = f"--dir {self.instance_dir} "
 
-        command = (
+        return (
             f"{cached_binary_path} --port {self.port} "
             f'--save "" --protected-mode no --daemonize yes '
             f"--logfile {self.server_logfile} " + dir_arg + " ".join(self.args)
         )
 
+    def _generic_launch_command(self, cached_binary_path: Path, server_args: str) -> str:
+        """The command for an engine with its own profile: pinned to its CPUs, in the background, log to file."""
+        command = self._engine.launch_command(
+            binary=cached_binary_path,
+            port=self.port,
+            ip=self.ip,
+            threads=self.threads,
+            cpus=",".join(map(str, self.server_cpus)),
+            logfile=self.server_logfile,
+            instance_dir=self.instance_dir,
+            extra_args=server_args,
+        )
+        self.args = [command]
+        return command
+
+    async def _launch(self, command: str, cached_binary_path: Path, env_prefix: str) -> None:
+        """Wrap the engine command (NUMA, library path, environment), run it and wait until it answers."""
         # Optionally bind memory to NUMA node for consistent performance
         if config.check_feature(config.Features.BIND_NUMA_MEMORY):
             numa_node = self._cpu_allocator.get_net_interface_numa(self.ip)
@@ -817,6 +863,8 @@ class Server:
     async def kill_all_valkey_instances_on_host(self):
         """Stop all instances of valkey server, regardless of which port they're running on"""
         await self.run_host_command(f"pkill -f {VALKEY_BINARY}", check=False)
+        for name in self._engine.kill_names:  # exact names only: -f would match any command line that mentions one
+            await self.run_host_command(f"pkill -x {name}", check=False)
 
         # Clear server allocations for this host (keep IRQ and benchmark allocations)
         all_allocations = self._cpu_allocator.get_all_allocations(self.ip)
@@ -858,8 +906,9 @@ class Server:
             )
 
         name = name.strip().split()[-1]
-        if name != VALKEY_BINARY:
-            raise RuntimeError(f"Process on port {self.port} is '{name}', expected '{VALKEY_BINARY}'")
+        expected_names = self._engine.process_names
+        if expected_names is not None and name not in expected_names:
+            raise RuntimeError(f"Process on port {self.port} is '{name}', expected '{' or '.join(expected_names)}'")
 
         await self.run_host_command(
             f"{self._host_valkey_cli()} -p {self.port} SHUTDOWN NOSAVE 2>/dev/null; "
@@ -1020,6 +1069,13 @@ class Server:
     # =============================================================================
     # SSH AND FILE OPERATIONS (delegated to SshHost)
     # =============================================================================
+
+    engine: str = DEFAULT_ENGINE  # instance attribute set by __init__; the class value serves partial test doubles
+
+    @property
+    def _engine(self):
+        """The EngineProfile of this server's engine."""
+        return get_engine(self.engine)
 
     @property
     def ssh(self):

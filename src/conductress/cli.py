@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any, List, Optional, Tuple
 
 from . import config
 from .cachecannon import DEFAULT_CACHECANNON_BINARY
+from .engines import DEFAULT_ENGINE, ENGINES, non_valkey_sources
 from .fleet_client import FleetClientError
 from .generator_profiles import PROFILES as GENERATOR_PROFILES
 from .generator_profiles import effective_generator_profile
@@ -513,6 +514,13 @@ def build_parser() -> argparse.ArgumentParser:
         default="",
         help="Field name size in bytes for hset (e.g., 16). Overrides the standard workload's "
         "field size; per-item user data is recomputed as field+value. Only affects hset.",
+    )
+    mem_parser.add_argument(
+        "--engine",
+        choices=sorted(ENGINES),
+        default=DEFAULT_ENGINE,
+        help="Engine to measure (default valkey; this also runs Redis built from source). Another engine needs "
+        "--source manually_uploaded, takes the settle without a rehash check, and records the engine name.",
     )
     mem_parser.add_argument("--expire", action="store_true", help="Also test with expiration enabled")
     mem_parser.add_argument(
@@ -2093,6 +2101,9 @@ def handle_queue_add_memory(args: argparse.Namespace) -> int:
 
     if not _source_is_valid(args.source):
         return 1
+    if args.engine != DEFAULT_ENGINE and args.source not in non_valkey_sources():
+        print(f"Error: --engine {args.engine} needs --source {' or '.join(non_valkey_sources())}", file=sys.stderr)
+        return 1
 
     types = [t.strip() for t in args.types.split(",") if t.strip()]
     valid_types = ["set", "sadd", "zadd", "hset"]
@@ -2189,6 +2200,7 @@ def handle_queue_add_memory(args: argparse.Namespace) -> int:
             populate_mode=args.populate_mode,
             settle=args.settle,
             item_count=item_count,
+            engine=args.engine,
         )
         queue.submit_task(task)
 
@@ -2197,6 +2209,8 @@ def handle_queue_add_memory(args: argparse.Namespace) -> int:
         return 0
     print(f"Queued {len(workloads)} memory task(s):")
     print(f"  source={args.source} specifier={args.specifier}")
+    if args.engine != DEFAULT_ENGINE:
+        print(f"  engine: {args.engine} (settle makes no rehash check)")
     if item_count != config.MEM_TEST_ITEM_COUNT:
         print(f"  item count: {item_count:,}")
     for wl in workloads:

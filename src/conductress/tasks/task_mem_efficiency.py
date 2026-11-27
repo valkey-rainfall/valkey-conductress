@@ -9,7 +9,7 @@ from collections import deque
 from collections.abc import Awaitable, Callable, Coroutine
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional, Sequence
+from typing import Any, ClassVar, Optional, Sequence
 
 import plotext as plt
 
@@ -21,6 +21,7 @@ from conductress.config import (
     get_sweep_engine,
     should_profile_internals,
 )
+from conductress.engines import DEFAULT_ENGINE, get_engine, non_valkey_sources
 from conductress.file_protocol import BenchmarkResults, BenchmarkStatus
 from conductress.heap_profiler import (
     JEMALLOC_PROF_CONFIGURE_OPTS,
@@ -320,6 +321,21 @@ class MemTaskData(BaseTaskData):
     settle: bool = False  # opt-in: quiesce until used_memory plateaus before sampling
     # Items to fill. Only a manual task may change it; a sweep task (sweep_commit set) keeps the default.
     item_count: int = MEM_TEST_ITEM_COUNT
+    # Engine profile (conductress.engines): how the server is started and settled. Left out of the saved
+    # document while it is the default, so a Valkey or Redis task is serialized exactly as before.
+    engine: str = DEFAULT_ENGINE
+    _OMIT_WHEN_DEFAULT: ClassVar[tuple[str, ...]] = ("engine",)
+
+    def __post_init__(self):
+        super().__post_init__()
+        get_engine(self.engine)  # ValueError for an unknown name
+        if self.engine != DEFAULT_ENGINE:
+            if self.source not in non_valkey_sources():
+                raise ValueError(
+                    f"engine {self.engine} needs a source in {list(non_valkey_sources())}, got {self.source}"
+                )
+            if self.sweep_commit:
+                raise ValueError("a sweep task runs the default engine")
 
     def short_description(self) -> str:
         description = self.type
@@ -352,6 +368,8 @@ class MemTaskData(BaseTaskData):
             self.populate_mode,
             self.settle,
             self.item_count,
+            rehash_check=get_engine(self.engine).rehash_check,
+            engine=self.engine,
         )
 
 
@@ -378,7 +396,8 @@ class MemTaskRunner(BaseTaskRunner):
         populate_mode: str = "random",
         settle: bool = False,
         item_count: Optional[int] = None,
-        rehash_check: bool = True,
+        rehash_check: Optional[bool] = None,
+        engine: str = DEFAULT_ENGINE,
     ):
         super().__init__(task_name)
 
@@ -404,8 +423,10 @@ class MemTaskRunner(BaseTaskRunner):
         self.user_data_bytes = user_data_bytes
         self.populate_mode = populate_mode
         self.settle = settle
+        self.engine = engine
+        self._profile = get_engine(engine)
         # False for an engine without DEBUG HTSTATS: the settle then makes no rehash assertion (see below).
-        self.rehash_check = rehash_check
+        self.rehash_check = self._profile.rehash_check if rehash_check is None else rehash_check
         self.item_count = item_count if item_count is not None else MEM_TEST_ITEM_COUNT
 
         # test data
@@ -425,12 +446,13 @@ class MemTaskRunner(BaseTaskRunner):
         # Write initial status
         self.file_protocol.write_status(self.status)
 
-        num_servers: int = await Server(self.server_ip).get_available_cpu_count() // Server.get_num_cpus(1)
+        cpus_per_server = Server.get_num_cpus(1) if self._profile.valkey_launch else self._profile.cpus_needed(1)
+        num_servers: int = await self._host().get_available_cpu_count() // cpus_per_server
         num_servers = MEM_TEST_MAX_CONCURRENT if num_servers > MEM_TEST_MAX_CONCURRENT else num_servers
 
         self.logger.info("Ensuring binary is ready")
-        await Server(self.server_ip).kill_all_valkey_instances_on_host()
-        self.cached_binary_path = await Server(self.server_ip).ensure_binary_cached(
+        await self._host().kill_all_valkey_instances_on_host()
+        self.cached_binary_path = await self._host().ensure_binary_cached(
             source=self.source, specifier=self.specifier, make_args=self.make_args
         )
         self.logger.info(f"Binary ready! Testing with up to {num_servers} instances on server")
@@ -505,7 +527,11 @@ class MemTaskRunner(BaseTaskRunner):
         self.status.end_time = time.time()
         self.file_protocol.write_status(self.status)
 
-        await Server(self.server_ip).kill_all_valkey_instances_on_host()
+        await self._host().kill_all_valkey_instances_on_host()
+
+    def _host(self) -> Server:
+        """A Server handle for host-wide commands (kill, binary cache). The Valkey call is the one it always was."""
+        return Server(self.server_ip) if self._profile.valkey_launch else Server(self.server_ip, engine=self.engine)
 
     async def test_single_size_overhead(self, val_size: int, port: int, semaphore) -> dict[str, Any]:
         """Test memory efficiency for a single item size."""
@@ -522,6 +548,8 @@ class MemTaskRunner(BaseTaskRunner):
 
             # Settling asserts rehash completion through DEBUG HTSTATS, which the
             # server only answers when the debug command is enabled at startup.
+            # The engine is passed only when it is not the default, so a Valkey call is the one it always was.
+            engine_kwargs = {} if self._profile.valkey_launch else {"engine": self.engine}
             valkey = await Server.with_path(
                 self.server_ip,
                 port,
@@ -529,6 +557,7 @@ class MemTaskRunner(BaseTaskRunner):
                 io_threads=1,
                 env_prefix=env_prefix,
                 server_args="--enable-debug-command yes" if self.settle and self.rehash_check else "",
+                **engine_kwargs,
             )
             self.commit_hash = valkey.get_build_hash()
 
@@ -773,6 +802,8 @@ class MemTaskRunner(BaseTaskRunner):
             }
             if not self.rehash_check:  # absent means the rehash check ran, as in every record before it existed
                 result["rehash_check"] = False
+            if not self._profile.valkey_launch:
+                result["engine"] = self.engine
             return result
 
     def plot(self, efficiency_map: dict[int, float]) -> None:

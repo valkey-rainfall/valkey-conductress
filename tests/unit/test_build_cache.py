@@ -570,3 +570,11 @@ def test_the_dry_run_prints_the_last_use_note(env, monkeypatch):
     monkeypatch.setattr(bc, "mount_options", lambda path: "rw,noatime")
     _, text = run(env)
     assert "Last use = newest mtime of any file in the entry. This file system is mounted noatime" in text
+
+
+def test_a_running_engine_with_its_own_process_name_counts_as_busy(env):
+    (env["proc"] / "9").mkdir()
+    (env["proc"] / "9" / "comm").write_text("dragonfly\n")
+    (env["proc"] / "9" / "cmdline").write_bytes(b"")
+    reasons = bc.busy_reasons(queue_dir=env["queue"], journal_path=env["tmp"] / "j.json", proc_root=env["proc"])
+    assert reasons == ["process dragonfly is running"]
