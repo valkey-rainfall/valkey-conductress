@@ -18,6 +18,8 @@ The task result records `item_count` (reached) and `item_count_requested`.
 | settle | The step that makes the sample a steady-state size: wait until used_memory stops moving, read every item once so an incremental rehash completes, check with DEBUG HTSTATS that no rehash is left (up to 3 read passes, otherwise the task fails), then wait until used_memory and any hash-table overhead fields of MEMORY STATS are stable. |
 | profiled | The allocator was profiling heap allocations (jemalloc `opt.prof`). Profiling adds metadata that makes RSS about 100 times larger. It does not change used_memory. |
 
+Neutral settle. An engine without DEBUG HTSTATS (not documented for Dragonfly or Garnet) is settled without the rehash assertion: wait until used_memory stops moving, read every item once, wait again, then the same stability check. It records `settle.key_check` = `not_applicable`, `settle.rehash_check` = false and, in the task result, `rehash_check` = false. Such a result states a weaker check than the Valkey and Redis settle, and a report must say so. The Valkey and Redis settle is unchanged.
+
 A profiled run has a valid total and an invalid RSS. A run is treated as profiled when the allocator
 says so (MEMORY MALLOC-STATS `opt.prof`), or, when the engine cannot say, when profiling was requested.
 
@@ -39,7 +41,7 @@ The result of each task has a `memory_record` object:
 | engine | `server_name`, `version` (valkey_version, else redis_version), `executable` (file name only), `git_sha1` from INFO server. None when the engine does not report it. |
 | binary | `sha256` of the server binary and the first line of `<binary> --version`. |
 | profiling | `requested`, `active` (from MEMORY MALLOC-STATS; None = the engine cannot say), `profiled`. |
-| settle | `requested`, `settled`, `passes`, `key_check`, `stability`. |
+| settle | `requested`, `settled`, `passes`, `key_check`, `stability`. `rehash_check` is present, and false, only for an engine settled without the DEBUG HTSTATS rehash assertion (see below); absent means the check ran. |
 | samples | `before_fill`, `after_fill`, `after_settle`; each has `used_memory`, `used_memory_rss`, `vm_rss`, `rss_anon` (None when not available). |
 | encoding | OBJECT ENCODING of the collection key (None for SET). |
 | config | CONFIG GET of the settings that change memory: listpack and set/zset/list thresholds, activerehashing, hz, lazyfree and maxmemory settings. Only what the engine knows. |

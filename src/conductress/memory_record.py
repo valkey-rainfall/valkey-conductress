@@ -191,30 +191,35 @@ def build_memory_record(
     item_count: int,
     samples: dict[str, dict[str, Optional[int]]],
     conductress_revision: Optional[str],
+    settle_rehash_check: bool = True,
 ) -> dict[str, Any]:
     """The per-task record stored in the task result under ``memory_record``.
 
     ``samples`` has ``before_fill``, ``after_fill`` and ``after_settle`` (the last equals
     after_fill when settle was off). Totals and RSS are taken between before_fill and the last
     sample. A run counts as profiled when the allocator reported profiling, or, when it could
-    not say, when profiling was requested.
+    not say, when profiling was requested. ``settle_rehash_check`` is False for an engine settled without a
+    DEBUG HTSTATS rehash assertion; the record then carries ``settle.rehash_check: false`` (absent means it ran).
     """
     last = samples.get("after_settle") or samples.get("after_fill") or {}
     before = samples.get("before_fill") or {}
     profiled = profiling_active_at_runtime if profiling_active_at_runtime is not None else profiling_requested
     rss, rss_source = rss_per_item(before, last, item_count, profiled)
+    settle = {
+        "requested": settle_requested,
+        "settled": bool(settle_requested),
+        "passes": settle_passes,
+        "key_check": settle_key_check,
+        "stability": settle_stability,
+    }
+    if not settle_rehash_check:
+        settle["rehash_check"] = False
     return {
         "schema": RECORD_SCHEMA,
         "engine": engine,
         "binary": {"sha256": binary_sha256, "version_text": version_text},
         "profiling": {"requested": profiling_requested, "active": profiling_active_at_runtime, "profiled": profiled},
-        "settle": {
-            "requested": settle_requested,
-            "settled": bool(settle_requested),
-            "passes": settle_passes,
-            "key_check": settle_key_check,
-            "stability": settle_stability,
-        },
+        "settle": settle,
         "encoding": encoding,
         "config": config,
         "item_count": item_count,

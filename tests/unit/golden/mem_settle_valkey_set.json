@@ -1,0 +1,139 @@
+{
+ "commands": [
+  "MEMORY MALLOC-STATS",
+  "DEBUG HTSTATS 0",
+  "DEBUG HTSTATS 0",
+  "MEMORY STATS",
+  "CONFIG GET hash-max-listpack-*",
+  "CONFIG GET hash-max-ziplist-*",
+  "CONFIG GET zset-max-*",
+  "CONFIG GET set-max-*",
+  "CONFIG GET list-max-*",
+  "CONFIG GET activerehashing",
+  "CONFIG GET hz",
+  "CONFIG GET lazyfree-*",
+  "CONFIG GET maxmemory*"
+ ],
+ "infos": [
+  "memory",
+  "server",
+  "memory",
+  "memory",
+  "memory",
+  "memory",
+  "memory",
+  "memory",
+  "memory",
+  "memory",
+  "memory",
+  "memory",
+  "memory",
+  "memory",
+  "memory",
+  "memory"
+ ],
+ "result": {
+  "after_memory": {
+   "used_memory": "5900000"
+  },
+  "before_memory": {
+   "used_memory": "1000000"
+  },
+  "breakdown": null,
+  "has_expire": false,
+  "item_count": 5000,
+  "item_count_requested": 5000,
+  "memory_record": {
+   "binary": {
+    "sha256": null,
+    "version_text": null
+   },
+   "conductress_revision": "rev0",
+   "config": {},
+   "encoding": null,
+   "engine": {
+    "executable": null,
+    "git_sha1": null,
+    "server_name": "valkey",
+    "version": "9.0.0"
+   },
+   "item_count": 5000,
+   "profiling": {
+    "active": null,
+    "profiled": false,
+    "requested": false
+   },
+   "rss_bytes_per_item": 2.048,
+   "rss_source": "proc_vmrss",
+   "samples": {
+    "after_fill": {
+     "rss_anon": 92160,
+     "used_memory": 6000000,
+     "used_memory_rss": null,
+     "vm_rss": 102400
+    },
+    "after_settle": {
+     "rss_anon": 92160,
+     "used_memory": 5900000,
+     "used_memory_rss": null,
+     "vm_rss": 112640
+    },
+    "before_fill": {
+     "rss_anon": 92160,
+     "used_memory": 1000000,
+     "used_memory_rss": null,
+     "vm_rss": 102400
+    }
+   },
+   "schema": 1,
+   "settle": {
+    "key_check": "hashtable",
+    "passes": 1,
+    "requested": true,
+    "settled": true,
+    "stability": "stable"
+   },
+   "total_bytes_per_item": 980.0
+  },
+  "per_item_overhead": 956.0,
+  "per_key_size": 980.0,
+  "raw_stacks": null,
+  "rehash_passes": 1,
+  "settle_key_check": "hashtable",
+  "settle_key_encoding": null,
+  "settle_stability": {
+   "elapsed_s": 3.0,
+   "interval_s": 1.0,
+   "max_seconds": 60.0,
+   "rel_eps": 0.001,
+   "samples": [
+    {
+     "used_memory": 5900000.0
+    },
+    {
+     "used_memory": 5900000.0
+    },
+    {
+     "used_memory": 5900000.0
+    },
+    {
+     "used_memory": 5900000.0
+    }
+   ],
+   "series": [
+    "used_memory"
+   ],
+   "stable_samples": 3,
+   "verdict": "stable"
+  },
+  "settled": true,
+  "user_data_per_item": 24,
+  "val_size": 16
+ },
+ "start_kwargs": {
+  "env_prefix": "",
+  "io_threads": "1",
+  "server_args": "--enable-debug-command yes"
+ },
+ "touches": 1
+}

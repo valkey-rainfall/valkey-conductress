@@ -161,6 +161,7 @@ async def settle_rehash(
 NOT_HASHTABLE_RE = re.compile(r"not represented using\s+(?:an?\s+|the\s+)?hash\s*table", re.IGNORECASE)
 KEY_CHECK_HASHTABLE = "hashtable"
 KEY_CHECK_NOT_HASHTABLE = "not_hashtable"
+KEY_CHECK_NOT_APPLICABLE = "not_applicable"  # neutral settle: the engine has no key-level table check
 
 # OBJECT ENCODING answers, asked before DEBUG HTSTATS-KEY. Only these are decided up front:
 # a hash table (a skiplist set keeps one) is checked, a compact or tree encoding has no
@@ -377,6 +378,7 @@ class MemTaskRunner(BaseTaskRunner):
         populate_mode: str = "random",
         settle: bool = False,
         item_count: Optional[int] = None,
+        rehash_check: bool = True,
     ):
         super().__init__(task_name)
 
@@ -402,6 +404,8 @@ class MemTaskRunner(BaseTaskRunner):
         self.user_data_bytes = user_data_bytes
         self.populate_mode = populate_mode
         self.settle = settle
+        # False for an engine without DEBUG HTSTATS: the settle then makes no rehash assertion (see below).
+        self.rehash_check = rehash_check
         self.item_count = item_count if item_count is not None else MEM_TEST_ITEM_COUNT
 
         # test data
@@ -524,7 +528,7 @@ class MemTaskRunner(BaseTaskRunner):
                 self.cached_binary_path,
                 io_threads=1,
                 env_prefix=env_prefix,
-                server_args="--enable-debug-command yes" if self.settle else "",
+                server_args="--enable-debug-command yes" if self.settle and self.rehash_check else "",
             )
             self.commit_hash = valkey.get_build_hash()
 
@@ -573,37 +577,54 @@ class MemTaskRunner(BaseTaskRunner):
                     port,
                 )
 
-                # Finish any rehash the fill left behind, then assert none remains.
-                async def _stats() -> Optional[str]:
-                    return await valkey.run_valkey_command(htstats_command(self.test))
+                if self.rehash_check:
+                    # Finish any rehash the fill left behind, then assert none remains.
+                    async def _stats() -> Optional[str]:
+                        return await valkey.run_valkey_command(htstats_command(self.test))
 
-                async def _keyspace_stats() -> Optional[str]:
-                    return await valkey.run_valkey_command("DEBUG HTSTATS 0")
+                    async def _keyspace_stats() -> Optional[str]:
+                        return await valkey.run_valkey_command("DEBUG HTSTATS 0")
 
-                async def _touch() -> int:
-                    return await asyncio.to_thread(touch, valkey.ip, valkey.port, workload)
+                    async def _touch() -> int:
+                        return await asyncio.to_thread(touch, valkey.ip, valkey.port, workload)
 
-                async def _encoding() -> Optional[str]:
-                    return await valkey.run_valkey_command(f"OBJECT ENCODING {COLLECTION_KEYS[self.test]}")
+                    async def _encoding() -> Optional[str]:
+                        return await valkey.run_valkey_command(f"OBJECT ENCODING {COLLECTION_KEYS[self.test]}")
 
-                rehash_passes, settle_key_check, settle_key_encoding = await settle_rehash_for_key(
-                    _stats,
-                    _keyspace_stats,
-                    _touch,
-                    encoding_fn=_encoding if self.test in COLLECTION_KEYS else None,
-                )
-                self.logger.info(
-                    "Rehash settled after %d read pass(es), key check %s, encoding %s (port %d)",
-                    rehash_passes,
-                    settle_key_check,
-                    settle_key_encoding,
-                    port,
-                )
-                if rehash_passes:
-                    # Completing a rehash frees the old table; let the sample catch up.
+                    rehash_passes, settle_key_check, settle_key_encoding = await settle_rehash_for_key(
+                        _stats,
+                        _keyspace_stats,
+                        _touch,
+                        encoding_fn=_encoding if self.test in COLLECTION_KEYS else None,
+                    )
+                    self.logger.info(
+                        "Rehash settled after %d read pass(es), key check %s, encoding %s (port %d)",
+                        rehash_passes,
+                        settle_key_check,
+                        settle_key_encoding,
+                        port,
+                    )
+                    if rehash_passes:
+                        # Completing a rehash frees the old table; let the sample catch up.
+                        settled_bytes, settle_secs = await quiesce_until_stable(_sample_used_memory)
+                        self.logger.info(
+                            "Post-rehash quiesce: used_memory settled at %d bytes after %.0fs (port %d)",
+                            settled_bytes,
+                            settle_secs,
+                            port,
+                        )
+                else:
+                    # An engine without DEBUG HTSTATS: read every item once, as
+                    # the Valkey settle does, but make no rehash assertion. The record says so.
+                    async def _touch_once() -> int:
+                        return await asyncio.to_thread(touch, valkey.ip, valkey.port, workload)
+
+                    await _touch_once()
+                    rehash_passes, settle_key_check = 1, KEY_CHECK_NOT_APPLICABLE
+                    self.logger.info("Neutral settle: one read pass, no rehash check (port %d)", port)
                     settled_bytes, settle_secs = await quiesce_until_stable(_sample_used_memory)
                     self.logger.info(
-                        "Post-rehash quiesce: used_memory settled at %d bytes after %.0fs (port %d)",
+                        "Post-read quiesce: used_memory settled at %d bytes after %.0fs (port %d)",
                         settled_bytes,
                         settle_secs,
                         port,
@@ -723,6 +744,7 @@ class MemTaskRunner(BaseTaskRunner):
                 settle_passes=rehash_passes,
                 settle_key_check=settle_key_check,
                 settle_stability=settle_stability["verdict"] if settle_stability else None,
+                settle_rehash_check=self.rehash_check,
                 encoding=key_encoding or settle_key_encoding,
                 config=memory_config,
                 item_count=item_count,
@@ -749,6 +771,8 @@ class MemTaskRunner(BaseTaskRunner):
                 "breakdown": breakdown,
                 "raw_stacks": raw_stacks,
             }
+            if not self.rehash_check:  # absent means the rehash check ran, as in every record before it existed
+                result["rehash_check"] = False
             return result
 
     def plot(self, efficiency_map: dict[int, float]) -> None:
