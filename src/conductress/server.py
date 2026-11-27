@@ -1061,6 +1061,10 @@ class Server:
         """Get the commit hash of the current build."""
         return self._binary.get_build_hash()
 
+    def prebuilt_info(self) -> Optional[dict]:
+        """The verified prebuilt_engine installation (tag, tarball and entrypoint sha256), or None."""
+        return self._binary.prebuilt_info()
+
     @staticmethod
     async def delete_entire_build_cache(server_ips) -> None:
         """Delete the entire build cache on all servers."""

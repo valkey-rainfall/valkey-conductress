@@ -14,6 +14,7 @@ from typing import Optional
 import asyncssh
 
 from . import config
+from .prebuilt_engine import VerifiedEngine, verify_prebuilt_engine
 from .ssh_host import SshHost
 from .utility import async_run
 
@@ -72,6 +73,7 @@ class BinaryManager:
         self._host = host
         self._logger = logging.getLogger(f"{self.__class__.__name__}.{host.ip}")
 
+        self._prebuilt: Optional[VerifiedEngine] = None
         self.source: Optional[str] = None
         self.specifier: Optional[str] = None
         self.hash: Optional[str] = None
@@ -100,6 +102,8 @@ class BinaryManager:
 
         if self.source == config.MANUALLY_UPLOADED:
             return await self._ensure_binary_uploaded(self.specifier)
+        elif self.source == config.PREBUILT_ENGINE:
+            return await self._ensure_prebuilt_engine(self.specifier)
         else:
             if self.source not in config.REPO_NAMES:
                 raise ValueError(f"Unknown source: {self.source}")
@@ -240,6 +244,17 @@ class BinaryManager:
             await self._host.run_host_command(f"cp {build_binary} {cached_binary_path}")
 
         return cached_binary_path
+
+    async def _ensure_prebuilt_engine(self, specifier: Optional[str]) -> Path:
+        """Check an engine installed by hand against its MANIFEST and return its entrypoint. Nothing is cached."""
+        verified = await verify_prebuilt_engine(self._host, specifier or "")
+        self.hash = verified.entrypoint_sha256
+        self._prebuilt = verified
+        return Path(verified.entrypoint)
+
+    def prebuilt_info(self) -> Optional[dict]:
+        """What the last prebuilt_engine check verified (tag, tarball and entrypoint sha256), or None."""
+        return self._prebuilt.info() if self._prebuilt else None
 
     async def _ensure_binary_uploaded(self, local_path: Optional[str]) -> Path:
         """Upload a local binary to the remote cache."""

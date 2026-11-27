@@ -100,6 +100,7 @@ async def test_a_memory_task_runs_against_a_fake_engine(monkeypatch):
     monkeypatch.setitem(tme.quiesce_until_stable.__kwdefaults__, "sleep_fn", fast_sleep)
     monkeypatch.setitem(tme.check_memory_stability.__kwdefaults__, "sleep_fn", fast_sleep)
     monkeypatch.setattr(config, "SERVER_READY_RETRY_DELAY", 0.1)
+    monkeypatch.setattr(config, "SERVER_READY_MAX_RETRIES", 200)  # up to 20 s: a loaded runner starts Python slowly
     cpu = min(os.sched_getaffinity(0))
 
     async def with_path(ip, server_port, binary, io_threads, env_prefix="", server_args="", engine="valkey"):

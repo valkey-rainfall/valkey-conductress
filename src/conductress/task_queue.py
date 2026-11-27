@@ -130,8 +130,11 @@ class BaseTaskData(ABC):
         if not hasattr(self, "_override_task_id"):
             self._override_task_id: Optional[str] = None
         self.topology = TopologySpec.from_dict(self.topology)
-        if self.source != config.MANUALLY_UPLOADED and self.source not in config.REPO_NAMES:
-            raise ValueError(f"Unknown source: {self.source}. Valid: {config.REPO_NAMES + [config.MANUALLY_UPLOADED]}")
+        extra = list(self._extra_sources())
+        if self.source != config.MANUALLY_UPLOADED and self.source not in config.REPO_NAMES + extra:
+            raise ValueError(
+                f"Unknown source: {self.source}. Valid: {config.REPO_NAMES + [config.MANUALLY_UPLOADED] + extra}"
+            )
 
     def __eq__(self, other):
         if not isinstance(other, BaseTaskData):
@@ -159,6 +162,10 @@ class BaseTaskData(ABC):
     def prepare_task_runner(self, server_infos: list[config.ServerInfo]) -> "BaseTaskRunner":
         """Return the task runner for this task."""
         raise NotImplementedError("Subclasses must implement this method.")
+
+    def _extra_sources(self) -> tuple[str, ...]:
+        """Sources this task type accepts besides repositories and manually_uploaded."""
+        return ()
 
     def to_document(self) -> dict:
         """The task as a plain dict (``asdict``), minus the ``_OMIT_WHEN_DEFAULT`` fields that hold their default."""

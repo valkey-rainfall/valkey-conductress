@@ -13,6 +13,7 @@ from typing import Any, ClassVar, Optional, Sequence
 
 import plotext as plt
 
+from conductress import config
 from conductress.config import (
     MEM_TEST_ITEM_COUNT,
     MEM_TEST_KEY_SIZE,
@@ -41,6 +42,7 @@ from conductress.memory_record import (
     sample_values,
     take_sample,
 )
+from conductress.prebuilt_engine import ManifestError, parse_specifier
 from conductress.server import Server
 from conductress.sweep.populator import populate, touch
 from conductress.task_queue import BaseTaskData, BaseTaskRunner
@@ -326,9 +328,19 @@ class MemTaskData(BaseTaskData):
     engine: str = DEFAULT_ENGINE
     _OMIT_WHEN_DEFAULT: ClassVar[tuple[str, ...]] = ("engine",)
 
+    def _extra_sources(self) -> tuple[str, ...]:
+        return (config.PREBUILT_ENGINE,)
+
     def __post_init__(self):
         super().__post_init__()
         get_engine(self.engine)  # ValueError for an unknown name
+        if self.source == config.PREBUILT_ENGINE:
+            try:
+                named_engine, _ = parse_specifier(self.specifier)
+            except ManifestError as exc:
+                raise ValueError(str(exc)) from exc
+            if named_engine != self.engine:
+                raise ValueError(f"specifier {self.specifier!r} names {named_engine}, the task engine is {self.engine}")
         if self.engine != DEFAULT_ENGINE:
             if self.source not in non_valkey_sources():
                 raise ValueError(
@@ -430,6 +442,7 @@ class MemTaskRunner(BaseTaskRunner):
         self.item_count = item_count if item_count is not None else MEM_TEST_ITEM_COUNT
 
         # test data
+        self.prebuilt_info: Optional[dict] = None  # set when the source is prebuilt_engine
         self.commit_hash: Optional[str] = None
         self.cached_binary_path: Optional[Path] = None
 
@@ -452,9 +465,12 @@ class MemTaskRunner(BaseTaskRunner):
 
         self.logger.info("Ensuring binary is ready")
         await self._host().kill_all_valkey_instances_on_host()
-        self.cached_binary_path = await self._host().ensure_binary_cached(
+        host = self._host()
+        self.cached_binary_path = await host.ensure_binary_cached(
             source=self.source, specifier=self.specifier, make_args=self.make_args
         )
+        if self.source == config.PREBUILT_ENGINE:
+            self.prebuilt_info = host.prebuilt_info()
         self.logger.info(f"Binary ready! Testing with up to {num_servers} instances on server")
 
         # Update progress: setup complete
@@ -804,6 +820,8 @@ class MemTaskRunner(BaseTaskRunner):
                 result["rehash_check"] = False
             if not self._profile.valkey_launch:
                 result["engine"] = self.engine
+            if self.prebuilt_info is not None:
+                result["prebuilt_engine"] = self.prebuilt_info
             return result
 
     def plot(self, efficiency_map: dict[int, float]) -> None:
