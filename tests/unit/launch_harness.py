@@ -19,7 +19,9 @@ CASES = {
 }
 
 
-async def start_and_record(case=None, *, server_kwargs=None, start_kwargs=None, features=(), binary=BINARY, **extra):
+async def start_and_record(
+    case=None, *, server_kwargs=None, start_kwargs=None, features=(), binary=BINARY, lsof_answers=None, **extra
+):
     """Start a Server with a recording host; return the host commands it issued, in order."""
     if case is not None:
         server_kwargs, start_kwargs, features = CASES[case]
@@ -32,6 +34,8 @@ async def start_and_record(case=None, *, server_kwargs=None, start_kwargs=None, 
 
     async def host(command, check=True):
         commands.append(command)
+        if command.startswith("lsof") and lsof_answers:
+            return lsof_answers.pop(0), ""
         return ("4242\n" if command.startswith("lsof") else ""), ""
 
     server._host.run_host_command = host  # the SshHost the Server wraps

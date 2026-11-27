@@ -654,6 +654,9 @@ BENCHMARK_MAX_ITERATIONS = 2_000_000_000
 # Server readiness: max attempts and delay between retries
 SERVER_READY_MAX_RETRIES = 10
 SERVER_READY_RETRY_DELAY = 1.0  # seconds
+# Reading the server's pid right after the launch command: the port may not have an owner yet.
+SERVER_PID_MAX_RETRIES = 40
+SERVER_PID_RETRY_DELAY = 0.25  # seconds, so up to 10 s
 
 # Thread pinning: brief delay for scheduler to apply affinity changes
 THREAD_PIN_SETTLE_DELAY = 0.1  # seconds
