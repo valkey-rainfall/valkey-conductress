@@ -103,6 +103,10 @@ class BaseTaskData(ABC):
 
     __task_registry: ClassVar[Dict[str, Type["BaseTaskData"]]] = {}
 
+    # Fields left out of the saved and submitted document while they hold their default, so a task that does not
+    # use an optional feature keeps the document it always had.
+    _OMIT_WHEN_DEFAULT: ClassVar[tuple[str, ...]] = ()
+
     @classmethod
     def register_tasks(cls):
         """Dynamically import all task modules to register them."""
@@ -156,9 +160,17 @@ class BaseTaskData(ABC):
         """Return the task runner for this task."""
         raise NotImplementedError("Subclasses must implement this method.")
 
+    def to_document(self) -> dict:
+        """The task as a plain dict (``asdict``), minus the ``_OMIT_WHEN_DEFAULT`` fields that hold their default."""
+        data = asdict(self)
+        for field_def in dataclasses_fields(self):
+            if field_def.name in self._OMIT_WHEN_DEFAULT and data.get(field_def.name) == field_def.default:
+                del data[field_def.name]
+        return data
+
     def save_to_file(self, filepath: Path):
         """Save the task to a JSON file"""
-        data = asdict(self)
+        data = self.to_document()
         data["timestamp"] = self.timestamp.isoformat()
         # Persist the envelope-supplied override alongside the task body so it
         # survives restart / from_file reload.  The key is prefixed with "__"

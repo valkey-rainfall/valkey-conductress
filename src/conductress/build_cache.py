@@ -35,6 +35,7 @@ from pathlib import Path
 from typing import IO, Callable, Iterable, Optional
 
 from . import config
+from .engines import ENGINES
 
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 ARGS_HASH_RE = re.compile(r"^[0-9a-f]{16}$")
@@ -46,7 +47,13 @@ _COMMIT_FIELD_RE = re.compile(rb'^      "commit": "([0-9a-f]{40})"')
 _HEAD_FIELD_RE = re.compile(rb'"([0-9a-f]{40})"')
 
 # Process names the deploy scripts treat as "a benchmark is running" (plus redis-server, the comparison engine).
-BUSY_PROCESS_NAMES = ("valkey-server", "redis-server", "cachecannon", "memtier_benchmark", "valkey-benchmark")
+BUSY_PROCESS_NAMES = (
+    "valkey-server",
+    "redis-server",
+    "cachecannon",
+    "memtier_benchmark",
+    "valkey-benchmark",
+) + tuple(name for engine in ENGINES.values() for name in engine.kill_names)
 
 DEFAULT_MIN_AGE_DAYS = 60
 RECHECK_EVERY = 10  # re-test "idle" after this many deletions

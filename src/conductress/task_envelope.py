@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import getpass
-from dataclasses import asdict
 from datetime import datetime, timezone
 from typing import Any, Optional
 
@@ -22,7 +21,7 @@ def _default_submitter() -> str:
 
 
 def serialize_task(task: BaseTaskData) -> dict[str, Any]:
-    data = asdict(task)
+    data = task.to_document()
     data["timestamp"] = task.timestamp.isoformat()
     return data
 

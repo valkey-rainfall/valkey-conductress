@@ -1,0 +1,27 @@
+{
+ "cpu_override": [
+  "LD_LIBRARY_PATH=~/build_cache/valkey/0000000000000000000000000000000000000000/0123456789abcdef ~/build_cache/valkey/0000000000000000000000000000000000000000/0123456789abcdef/valkey-server --port 6400 --save \"\" --protected-mode no --daemonize yes --logfile ~/valkey-server-6400.log --io-threads 2 --server-cpulist 4,5,6 --bio-cpulist 6 --aof-rewrite-cpulist 6 --bgsave-cpulist 6",
+  "lsof -ti :6400"
+ ],
+ "default": [
+  "LD_LIBRARY_PATH=~/build_cache/valkey/0000000000000000000000000000000000000000/0123456789abcdef ~/build_cache/valkey/0000000000000000000000000000000000000000/0123456789abcdef/valkey-server --port 6400 --save \"\" --protected-mode no --daemonize yes --logfile ~/valkey-server-6400.log --server-cpulist 0,1 --bio-cpulist 1,2,3,4,5 --aof-rewrite-cpulist 1,2,3,4,5 --bgsave-cpulist 1,2,3,4,5",
+  "lsof -ti :6400"
+ ],
+ "env_prefix": [
+  "JE_MALLOC_CONF=\"prof:true\" LD_LIBRARY_PATH=~/build_cache/valkey/0000000000000000000000000000000000000000/0123456789abcdef ~/build_cache/valkey/0000000000000000000000000000000000000000/0123456789abcdef/valkey-server --port 6400 --save \"\" --protected-mode no --daemonize yes --logfile ~/valkey-server-6400.log --server-cpulist 0,1 --bio-cpulist 1,2,3,4,5 --aof-rewrite-cpulist 1,2,3,4,5 --bgsave-cpulist 1,2,3,4,5",
+  "lsof -ti :6400"
+ ],
+ "instance_dir": [
+  "mkdir -p /work/inst-1",
+  "LD_LIBRARY_PATH=~/build_cache/valkey/0000000000000000000000000000000000000000/0123456789abcdef ~/build_cache/valkey/0000000000000000000000000000000000000000/0123456789abcdef/valkey-server --port 6400 --save \"\" --protected-mode no --daemonize yes --logfile ~/valkey-server-6400.log --dir /work/inst-1 --io-threads 2 --server-cpulist 0,1,2 --bio-cpulist 2,3,4,5 --aof-rewrite-cpulist 2,3,4,5 --bgsave-cpulist 2,3,4,5",
+  "lsof -ti :6400"
+ ],
+ "numa_bound": [
+  "LD_LIBRARY_PATH=~/build_cache/valkey/0000000000000000000000000000000000000000/0123456789abcdef numactl --membind=1 ~/build_cache/valkey/0000000000000000000000000000000000000000/0123456789abcdef/valkey-server --port 6400 --save \"\" --protected-mode no --daemonize yes --logfile ~/valkey-server-6400.log --server-cpulist 0,1 --bio-cpulist 1,2,3,4,5 --aof-rewrite-cpulist 1,2,3,4,5 --bgsave-cpulist 1,2,3,4,5",
+  "lsof -ti :6400"
+ ],
+ "three_threads_with_server_args": [
+  "LD_LIBRARY_PATH=~/build_cache/valkey/0000000000000000000000000000000000000000/0123456789abcdef ~/build_cache/valkey/0000000000000000000000000000000000000000/0123456789abcdef/valkey-server --port 6400 --save \"\" --protected-mode no --daemonize yes --logfile ~/valkey-server-6400.log --io-threads 3 --server-cpulist 0,1,2,3 --bio-cpulist 3,4,5 --aof-rewrite-cpulist 3,4,5 --bgsave-cpulist 3,4,5 --enable-debug-command yes",
+  "lsof -ti :6400"
+ ]
+}
