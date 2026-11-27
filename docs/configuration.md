@@ -606,8 +606,21 @@ other value, including an empty string, is a startup error.
 
 `queue add-memory --engine {valkey,dragonfly,garnet}` (default `valkey`) measures an engine that is not built from
 a git commit. Valkey, and Redis built from source, keep the launch they always had; the default is unchanged.
-Another engine needs `--source manually_uploaded` (the binary is copied to the runner by hand, and the task records
-its sha256).
+Another engine needs `--source manually_uploaded` (one file, copied to the runner by hand; the task records its
+sha256) or `--source prebuilt_engine` (below).
+
+**prebuilt_engine.** For an engine that is a directory of files (a vendor release unpacked by hand),
+`--source prebuilt_engine --specifier <engine>:<tag> --engine <engine>` uses `~/engines/<engine>/<tag>/` on the
+benchmark host. A person installs it read-only and writes a `MANIFEST` (JSON: `schema` 1, `engine`, `tag`,
+`entrypoint`, `tarball` name and sha256 of the vendor archive, and `files`: every file's relative path and sha256).
+Conductress only checks it, with `head`, `find`, `test`, `id` and `sha256sum`, before it launches anything: it never
+downloads, never runs a file while checking, and refuses the directory if the MANIFEST is not strict JSON of that
+shape, a path is absolute or has `..`, a file is missing, unlisted or has another sha256, an entry is a symlink or
+a special file, is setuid, setgid, group- or world-writable, or is owned by another user, the entrypoint is not
+executable, or the directory or a parent is a symlink. The entrypoint sha256 and the tarball sha256 go into the task
+result (`prebuilt_engine`). Nothing is copied into the build cache, so `build-cache prune` never sees it.
+Limit: the check and the launch are two steps, so a file replaced between them is not seen; the read-only install,
+owned by the runner user, is what protects that gap.
 
 `conductress/engines.py` holds one profile per engine: whether DEBUG HTSTATS exists, how the server process is
 named, the thread flag and fixed flags of its command line, and the process names the host-wide stop uses (exact

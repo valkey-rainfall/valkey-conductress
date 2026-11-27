@@ -15,6 +15,7 @@ from .engines import DEFAULT_ENGINE, ENGINES, non_valkey_sources
 from .fleet_client import FleetClientError
 from .generator_profiles import PROFILES as GENERATOR_PROFILES
 from .generator_profiles import effective_generator_profile
+from .prebuilt_engine import ManifestError, parse_specifier
 from .task_queue import BaseTaskData, TaskQueue
 from .tasks.task_perf_benchmark import PerfTaskData, PerfTaskRunner
 from .tasks.task_replica_read import (
@@ -111,11 +112,11 @@ def _check_cpulist(value: str, name: str) -> None:
         raise ValueError(f"--{name}: {exc}") from exc
 
 
-def _source_is_valid(source: str) -> bool:
-    """True if ``source`` is a known repository; otherwise print the error and return False."""
-    if validate_source(source):
+def _source_is_valid(source: str, extra: tuple[str, ...] = ()) -> bool:
+    """True if ``source`` is a known repository (or one of ``extra``); otherwise print the error, return False."""
+    if validate_source(source) or source in extra:
         return True
-    valid_sources = config.REPO_NAMES + [config.MANUALLY_UPLOADED]
+    valid_sources = config.REPO_NAMES + [config.MANUALLY_UPLOADED, *extra]
     print(f"Error: Invalid source '{source}'. Valid: {', '.join(valid_sources)}", file=sys.stderr)
     return False
 
@@ -520,7 +521,8 @@ def build_parser() -> argparse.ArgumentParser:
         choices=sorted(ENGINES),
         default=DEFAULT_ENGINE,
         help="Engine to measure (default valkey; this also runs Redis built from source). Another engine needs "
-        "--source manually_uploaded, takes the settle without a rehash check, and records the engine name.",
+        "--source manually_uploaded or prebuilt_engine (--specifier <engine>:<tag>), takes the settle without a rehash "
+        "check, and records the engine name.",
     )
     mem_parser.add_argument("--expire", action="store_true", help="Also test with expiration enabled")
     mem_parser.add_argument(
@@ -2099,8 +2101,17 @@ def handle_queue_add_memory(args: argparse.Namespace) -> int:
     from conductress.sweep.memory_coordinator import MEMORY_WORKLOADS
     from conductress.tasks.task_mem_efficiency import MemTaskData
 
-    if not _source_is_valid(args.source):
+    if not _source_is_valid(args.source, extra=(config.PREBUILT_ENGINE,)):
         return 1
+    if args.source == config.PREBUILT_ENGINE:
+        try:
+            named_engine, _ = parse_specifier(args.specifier)
+        except ManifestError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 1
+        if named_engine != args.engine:
+            print(f"Error: the specifier names {named_engine}; pass --engine {named_engine}", file=sys.stderr)
+            return 1
     if args.engine != DEFAULT_ENGINE and args.source not in non_valkey_sources():
         print(f"Error: --engine {args.engine} needs --source {' or '.join(non_valkey_sources())}", file=sys.stderr)
         return 1

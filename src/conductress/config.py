@@ -783,6 +783,12 @@ REPO_NAMES = [repo[1] for repo in REPOSITORIES]
 MANUALLY_UPLOADED = "manually_uploaded"
 assert MANUALLY_UPLOADED not in REPO_NAMES, "MANUALLY_UPLOADED must not overlap with any repository names"
 
+# An engine installed by hand under PREBUILT_ENGINE_ROOT/<engine>/<tag>/ with a MANIFEST (see prebuilt_engine.py).
+# The root is a path on the benchmark host; the literal "~" is expanded by that host's shell.
+PREBUILT_ENGINE = "prebuilt_engine"
+PREBUILT_ENGINE_ROOT = "~/engines"
+assert PREBUILT_ENGINE not in REPO_NAMES, "PREBUILT_ENGINE must not overlap with any repository names"
+
 
 @dataclass
 class ServerInfo:

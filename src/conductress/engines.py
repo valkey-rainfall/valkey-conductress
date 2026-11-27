@@ -87,7 +87,7 @@ DEFAULT_ENGINE = "valkey"
 
 def non_valkey_sources() -> tuple[str, ...]:
     """Sources a non-Valkey engine may be provisioned from (a binary that is not built from a git commit)."""
-    return (config.MANUALLY_UPLOADED,)
+    return (config.MANUALLY_UPLOADED, config.PREBUILT_ENGINE)
 
 
 def get_engine(name: str) -> EngineProfile:
