@@ -1,0 +1,102 @@
+{
+ "commands": [
+  "MEMORY MALLOC-STATS",
+  "ZCARD myzset",
+  "OBJECT ENCODING myzset",
+  "CONFIG GET hash-max-listpack-*",
+  "CONFIG GET hash-max-ziplist-*",
+  "CONFIG GET zset-max-*",
+  "CONFIG GET set-max-*",
+  "CONFIG GET list-max-*",
+  "CONFIG GET activerehashing",
+  "CONFIG GET hz",
+  "CONFIG GET lazyfree-*",
+  "CONFIG GET maxmemory*"
+ ],
+ "infos": [
+  "memory",
+  "server",
+  "memory",
+  "memory"
+ ],
+ "result": {
+  "after_memory": {
+   "used_memory": "6000000"
+  },
+  "before_memory": {
+   "used_memory": "1000000"
+  },
+  "breakdown": null,
+  "has_expire": false,
+  "item_count": 5000,
+  "item_count_requested": 5000,
+  "memory_record": {
+   "binary": {
+    "sha256": null,
+    "version_text": null
+   },
+   "conductress_revision": "rev0",
+   "config": {},
+   "encoding": "skiplist",
+   "engine": {
+    "executable": null,
+    "git_sha1": null,
+    "server_name": "valkey",
+    "version": "9.0.0"
+   },
+   "item_count": 5000,
+   "profiling": {
+    "active": null,
+    "profiled": false,
+    "requested": false
+   },
+   "rss_bytes_per_item": 0.0,
+   "rss_source": "proc_vmrss",
+   "samples": {
+    "after_fill": {
+     "rss_anon": 92160,
+     "used_memory": 6000000,
+     "used_memory_rss": null,
+     "vm_rss": 102400
+    },
+    "after_settle": {
+     "rss_anon": 92160,
+     "used_memory": 6000000,
+     "used_memory_rss": null,
+     "vm_rss": 102400
+    },
+    "before_fill": {
+     "rss_anon": 92160,
+     "used_memory": 1000000,
+     "used_memory_rss": null,
+     "vm_rss": 102400
+    }
+   },
+   "schema": 1,
+   "settle": {
+    "key_check": null,
+    "passes": null,
+    "requested": false,
+    "settled": false,
+    "stability": null
+   },
+   "total_bytes_per_item": 1000.0
+  },
+  "per_item_overhead": 976.0,
+  "per_key_size": 1000.0,
+  "raw_stacks": null,
+  "rehash_passes": null,
+  "settle_key_check": null,
+  "settle_key_encoding": null,
+  "settle_stability": null,
+  "settled": false,
+  "user_data_per_item": 24,
+  "val_size": 16
+ },
+ "start_kwargs": {
+  "env_prefix": "",
+  "io_threads": "1",
+  "server_args": ""
+ },
+ "touches": 0
+}
