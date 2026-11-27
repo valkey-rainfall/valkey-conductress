@@ -74,15 +74,17 @@ def engine_identity(info_server: Optional[dict[str, str]]) -> dict[str, Optional
     """Server name, version, executable name and git sha from an INFO server section.
 
     The version is valkey_version when the server reports one (a Valkey server still shows a
-    compatibility redis_version), otherwise redis_version. The executable is reduced to its
+    compatibility redis_version), then dragonfly_version, otherwise redis_version. The executable is reduced to its
     file name so no host path is stored. Missing fields are None; nothing is inferred from
     the binary name.
     """
     info = info_server if isinstance(info_server, dict) else {}
     executable = info.get("executable")
+    # Dragonfly reports dragonfly_version (and no server_name). Valkey and Redis never send it.
+    dragonfly_version = info.get("dragonfly_version") or None
     return {
-        "server_name": info.get("server_name") or None,
-        "version": info.get("valkey_version") or info.get("redis_version") or None,
+        "server_name": info.get("server_name") or ("dragonfly" if dragonfly_version else None),
+        "version": info.get("valkey_version") or dragonfly_version or info.get("redis_version") or None,
         "executable": Path(executable).name if executable else None,
         "git_sha1": info.get("redis_git_sha1") or info.get("valkey_git_sha1") or None,
     }
