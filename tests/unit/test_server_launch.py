@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from conductress import engines
+from conductress import config, engines
 from conductress.engines import ENGINES, EngineProfile
 from conductress.server import Server
 
@@ -197,3 +197,43 @@ async def test_kill_all_uses_exact_names_for_other_engines(engine, expected):
     server._host.run_host_command = host
     await server.kill_all_valkey_instances_on_host()
     assert commands == expected
+
+
+# --- reading the pid right after the launch ----------------------------------------------------------------
+
+
+@pytest.fixture
+def no_pid_wait(monkeypatch):
+    monkeypatch.setattr(config, "SERVER_PID_RETRY_DELAY", 0)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("engine", ["valkey", "dragonfly"])
+async def test_an_empty_first_pid_answer_is_asked_again(engine, no_pid_wait):
+    """The launch returns before the server owns its port; an empty lsof answer used to end the task."""
+    commands = await start_and_record(engine=engine, start_kwargs={"io_threads": 1}, lsof_answers=["\n", "", "4242\n"])
+    assert [c for c in commands if c.startswith("lsof")] == ["lsof -ti :6400"] * 3
+
+
+@pytest.mark.asyncio
+async def test_a_first_pid_answer_costs_one_command_as_before():
+    commands = await start_and_record("default")
+    assert [c for c in commands if c.startswith("lsof")] == ["lsof -ti :6400"]
+
+
+@pytest.mark.asyncio
+async def test_a_port_that_never_gets_an_owner_ends_with_a_clear_error(monkeypatch):
+    monkeypatch.setattr(config, "SERVER_PID_RETRY_DELAY", 0)
+    monkeypatch.setattr(config, "SERVER_PID_MAX_RETRIES", 3)
+    with pytest.raises(
+        RuntimeError, match=r"no process listened on it after 0 s.*did not start.*valkey-server-6400.log"
+    ):
+        await start_and_record("default", lsof_answers=["\n"] * 10)
+
+
+@pytest.mark.asyncio
+async def test_an_answer_that_is_not_one_pid_is_not_retried(no_pid_wait):
+    answers = ["12\n34\n", "4242\n"]
+    with pytest.raises(RuntimeError, match="answered '12\\\\n34'"):
+        await start_and_record("default", lsof_answers=answers)
+    assert answers == ["4242\n"]  # only the first answer was read

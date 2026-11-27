@@ -812,14 +812,39 @@ class Server:
 
         out, err = await self.run_host_command(command)
 
-        pid_out, _ = await self.run_host_command(f"lsof -ti :{self.port}")
-        self.valkey_pid = int(pid_out.strip())
+        self.valkey_pid = await self._read_server_pid()
 
         await self.wait_until_ready()
 
         # Optionally pin individual threads to specific CPUs for precise control
         if config.check_feature(config.Features.PIN_VALKEY_THREADS):
             await self._pin_valkey_threads()
+
+    async def _read_server_pid(self) -> int:
+        """The pid of the process that listens on this server's port.
+
+        The launch command returns before the server owns its port: Valkey forks (--daemonize) before it binds,
+        and any other engine is started in the background. On a slow or busy host the first ``lsof`` can answer
+        nothing, which used to end the task with ``invalid literal for int()``. Ask again, a bounded number of
+        times, and say what happened if the port never gets an owner. A first answer that is a pid costs the
+        same single command as before.
+        """
+        waited = config.SERVER_PID_MAX_RETRIES * config.SERVER_PID_RETRY_DELAY
+        answer = ""
+        for attempt in range(config.SERVER_PID_MAX_RETRIES + 1):
+            out, _ = await self.run_host_command(f"lsof -ti :{self.port}")
+            answer = out.strip()
+            if answer.isdigit():
+                return int(answer)
+            if answer:  # not a single pid: do not wait, nothing will change
+                break
+            if attempt < config.SERVER_PID_MAX_RETRIES:
+                await asyncio.sleep(config.SERVER_PID_RETRY_DELAY)
+        reason = f"answered {answer!r}" if answer else f"no process listened on it after {waited:g} s"
+        raise RuntimeError(
+            f"could not read the pid of the server on port {self.port}: {reason}. "
+            f"The server did not start; see {self.server_logfile} on the host."
+        )
 
     async def wait_until_ready(self) -> None:
         """Wait until the server is ready to accept commands.

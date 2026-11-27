@@ -56,6 +56,14 @@ def _cli(port, command):
     return str(reply)
 
 
+def _listening(port):
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=0.2):
+            return True
+    except OSError:
+        return False
+
+
 def _engine_pid(port):
     for entry in Path("/proc").iterdir():
         if entry.name.isdigit():
@@ -71,7 +79,8 @@ def _engine_pid(port):
 async def _local_host(port, command, check=True):
     """Run a host command in a local shell, answering the few that need the real host's tools."""
     if command.startswith("lsof"):
-        return f"{_engine_pid(port) or ''}\n", ""
+        # Like lsof: a process is named only once it owns the listening socket, never before.
+        return (f"{_engine_pid(port)}\n" if _listening(port) and _engine_pid(port) else "\n"), ""
     if "SHUTDOWN NOSAVE" in command:  # the cleanup would call valkey-cli; do the SHUTDOWN here
         try:
             valkey.Valkey(host="127.0.0.1", port=port, socket_timeout=2).execute_command("SHUTDOWN", "NOSAVE")
