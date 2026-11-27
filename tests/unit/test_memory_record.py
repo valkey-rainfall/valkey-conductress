@@ -63,6 +63,33 @@ class TestEngineIdentity:
         ident = mr.engine_identity({"redis_version": "8.2.1", "executable": "/x/y/some-server"})
         assert ident == {"server_name": None, "version": "8.2.1", "executable": "some-server", "git_sha1": None}
 
+    def test_dragonfly_style_server_section(self):
+        info = {"dragonfly_version": "df-v2.1.0", "redis_mode": "standalone", "executable": "/x/y/dragonfly"}
+        ident = mr.engine_identity(info)
+        assert ident == {
+            "server_name": "dragonfly",
+            "version": "df-v2.1.0",
+            "executable": "dragonfly",
+            "git_sha1": None,
+        }
+
+    def test_dragonfly_version_wins_over_a_compatibility_redis_version(self):
+        ident = mr.engine_identity({"dragonfly_version": "df-v2.1.0", "redis_version": "7.4.0"})
+        assert (ident["server_name"], ident["version"]) == ("dragonfly", "df-v2.1.0")
+
+    def test_a_reported_server_name_is_kept(self):
+        ident = mr.engine_identity({"dragonfly_version": "df-v2.1.0", "server_name": "custom"})
+        assert ident["server_name"] == "custom"
+
+    def test_valkey_and_redis_identity_has_not_changed(self):
+        """Pinned: no dragonfly_version means the same four fields as before."""
+        assert mr.engine_identity({"redis_version": "8.0.0", "server_name": "redis"}) == {
+            "server_name": "redis",
+            "version": "8.0.0",
+            "executable": None,
+            "git_sha1": None,
+        }
+
     @pytest.mark.parametrize("info", [None, {}, "text"])
     def test_missing_section_gives_none_fields(self, info):
         assert mr.engine_identity(info) == {"server_name": None, "version": None, "executable": None, "git_sha1": None}

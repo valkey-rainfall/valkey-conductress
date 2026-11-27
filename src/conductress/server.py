@@ -65,6 +65,25 @@ def crash_report_window(marker_lines: str) -> Optional[tuple[int, Optional[int]]
     return start, end
 
 
+def keyspace_counts(info: dict[str, str]) -> tuple[int, int]:
+    """(keys, expires) summed over the ``dbN`` lines of INFO keyspace.
+
+    A line looks like ``keys=98331,expires=0,avg_ttl=0``. Only ``keys`` and ``expires`` are counted;
+    any other field, or a pair that is not ``name=integer``, is skipped, so a field another engine adds
+    cannot break the count.
+    """
+    counts: defaultdict[str, int] = defaultdict(int)
+    for line in info.values():
+        for item in line.split(","):
+            name, sep, val = item.partition("=")
+            if sep and name in ("keys", "expires"):
+                try:
+                    counts[name] += int(val)
+                except ValueError:
+                    continue
+    return (counts["keys"], counts["expires"])
+
+
 class Server:
     """Represents a server running a Valkey instance."""
 
@@ -932,13 +951,11 @@ class Server:
     async def count_items_expires(self) -> tuple[int, int]:
         """Count total items and items with expiry in the keyspace."""
         info = await self.info("keyspace")
-        counts: defaultdict[str, int] = defaultdict(int)
-        for line in info.values():
-            # 'keys=98331,expires=0,avg_ttl=0'
-            for item in line.split(","):
-                name, val = item.split("=")
-                counts[name] += int(val)
-        return (counts["keys"], counts["expires"])
+        if not info:  # an engine with no keyspace lines: ask DBSIZE
+            reply = await self.run_valkey_command("dbsize")
+            digits = "".join(ch for ch in (reply or "") if ch.isdigit())
+            return (int(digits) if digits else 0, 0)
+        return keyspace_counts(info)
 
     # =============================================================================
     # REPLICATION METHODS
