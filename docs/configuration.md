@@ -314,11 +314,20 @@ An entry is kept when:
   `--min-age-days` or `--max-size-gb`. (Every other source is a git clone, so
   its entries are rebuilt by a build.)
 - its last use is within `--min-age-days` (default 60). Last use is the newest
-  modification or access time of any file in the entry. On a file system
-  mounted `noatime` (the runners) nothing updates the access time, so it is the
-  build time (newest mtime), not a use time; an entry that ran recently but
-  is not a series point can be removed and is then rebuilt. The command prints
-  which time it used. `relatime` is enough to make access time count.
+  of the entry's use marker, the modification time of its files and, where the
+  file system records it, their access time. The marker is the file
+  `.last_used` in the entry directory: every cache hit (a source built from git,
+  and `manually_uploaded`) touches it with one short host command, never the
+  binary and never the directory mode. If the touch fails, the lookup still
+  succeeds and one warning is logged per process. On a file system mounted
+  `noatime` (the runners) nothing else updates the access time, so an entry
+  without a marker falls back to its build time (newest mtime), not a use time.
+  The command prints how many entries took their last use from the marker, an
+  access time or the build time. Entries get a marker only when a task uses
+  them, so an age-based prune is meaningful only after a few weeks of running;
+  until then the build-time entries can include ones that ran recently.
+  A `prebuilt_engine` directory is outside the build cache and has no marker: it
+  is verified in full on every use and is never pruned.
 - its commit is a point, a landmark, the last benchmarked head, or the newest
   merge commit in any state file in `sweep_data/` or `sweep_data/v3/` (all
   series, live ones and memory ones). The files are read line by line, so

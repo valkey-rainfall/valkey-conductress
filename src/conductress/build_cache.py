@@ -73,6 +73,11 @@ def not_rebuildable(source: str) -> bool:
     return source == config.MANUALLY_UPLOADED
 
 
+USE_MARKER = "marker"
+USE_ACCESS_TIME = "access time"
+USE_BUILD_TIME = "build time"
+
+
 class StateFileError(Exception):
     """A sweep state file is not in the format ``SweepState.save`` writes."""
 
@@ -90,6 +95,7 @@ class Entry:
     apparent: int = 0  # sum of file sizes
     # Files with more than one link: (device, inode) -> (allocated bytes, link count, links found in this entry).
     shared: dict = field(default_factory=dict)
+    use_source: str = USE_BUILD_TIME  # where last_use came from: "marker", "access time" or "build time"
 
     @property
     def name(self) -> str:
@@ -246,12 +252,21 @@ class Measured:
     allocated: int  # st_blocks * 512, each hard-linked file once
     last_use: float
     shared: dict  # hard-linked files: (device, inode) -> [allocated bytes, link count, links found]
+    use_source: str = USE_BUILD_TIME  # which time last_use came from: marker, access time or build time
 
 
 def _measure(path: Path) -> Optional[Measured]:
-    """Size and newest time of a tree, or None if it contains a symlink."""
+    """Size and newest time of a tree, or None if it contains a symlink.
+
+    The last use is the newest of the entry's use marker (``.last_used``, touched by every cache hit), the
+    modification time of every file and, where the file system records it, the access time of every file.
+    ``use_source`` says which one was newest: "marker", "access time" or "build time" (no marker, and no access
+    time newer than the files).
+    """
     apparent = allocated = 0
-    newest = 0.0
+    newest = 0.0  # newest modification time (files, directories)
+    newest_atime = 0.0
+    marker: Optional[float] = None
     shared: dict = {}
     stack = [path]
     while stack:
@@ -266,7 +281,11 @@ def _measure(path: Path) -> Optional[Measured]:
                     allocated += info.st_blocks * 512
                     stack.append(Path(item.path))
                     continue
-                newest = max(newest, info.st_mtime, info.st_atime)
+                if item.name == config.BUILD_CACHE_USE_MARKER and os.path.dirname(item.path) == str(path):
+                    marker = info.st_mtime
+                else:
+                    newest = max(newest, info.st_mtime)
+                    newest_atime = max(newest_atime, info.st_atime)
                 if info.st_nlink > 1:
                     key = (info.st_dev, info.st_ino)
                     if key not in shared:
@@ -278,7 +297,14 @@ def _measure(path: Path) -> Optional[Measured]:
                     allocated += info.st_blocks * 512
     info = path.lstat()
     allocated += info.st_blocks * 512 + sum(blocks for blocks, _, _ in shared.values())
-    return Measured(apparent, allocated, max(newest, info.st_mtime), shared)
+    newest = max(newest, info.st_mtime)
+    if marker is not None and marker >= max(newest, newest_atime):
+        source = USE_MARKER
+    elif newest_atime > newest + 1:
+        source = USE_ACCESS_TIME
+    else:
+        source = USE_BUILD_TIME
+    return Measured(apparent, allocated, max(newest, newest_atime, marker or 0.0), shared, source)
 
 
 def freed_estimate(entries: Iterable[Entry]) -> int:
@@ -333,6 +359,7 @@ def scan_cache(root: Path, sources: Iterable[str]) -> tuple[list[Entry], list[st
                         measured.last_use,
                         measured.apparent,
                         measured.shared,
+                        measured.use_source,
                     )
                 )
     return entries, skipped
@@ -509,10 +536,28 @@ def last_use_note(options: Optional[str]) -> str:
     return "newest mtime or atime of any file in the entry."
 
 
+def use_source_note(entries: list[Entry]) -> str:
+    """How many entries took their last use from the use marker, an access time or the build time."""
+    counts = {
+        name: sum(1 for e in entries if e.use_source == name) for name in (USE_MARKER, USE_ACCESS_TIME, USE_BUILD_TIME)
+    }
+    text = (
+        f"Last use taken from: marker {counts[USE_MARKER]}, access time {counts[USE_ACCESS_TIME]}, "
+        f"build time {counts[USE_BUILD_TIME]} entries."
+    )
+    if counts[USE_BUILD_TIME]:
+        text += (
+            " An entry without a marker uses its build time; a marker is written when a task uses an entry,"
+            " so an age-based prune is meaningful only after a few weeks of running."
+        )
+    return text
+
+
 def print_plan(plan: Plan, *, apply: bool, list_all: bool = False, mount: Optional[str] = None, out=sys.stdout) -> None:
     verb = "Removing" if apply else "Would remove"
     print(f"Last use = {last_use_note(mount)}", file=out)
     allentries = [e for entries in plan.kept.values() for e in entries] + plan.remove
+    print(use_source_note(allentries), file=out)
     print(f"Cache: {plan.total_entries} entries, {_sizes(allentries)}", file=out)
     per_source: dict[str, list[int]] = {}
     for entry in allentries:
